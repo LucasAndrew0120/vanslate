@@ -8,7 +8,7 @@ Vanslate 使用 `chrome.storage.local` 保存设置和缓存。扩展不运营�
 
 - 通用模型：`baseUrl`、`apiKey`、`models`、`activeModel`。
 - 语言：源语言、目标语言和界面语言。
-- 页面处理：系统提示词、用户提示词、渲染模式、译文 CSS。
+- 页面处理：系统提示词、用户提示词、渲染模式（译文覆盖原文 / 行内双语 / 块级双语）、译文 CSS。
 - 跳过翻译规则：`skipRules.enabled` 和 `skipRules.patterns`，用于在本地跳过数字、版本号、链接、路径、代码符号等高置信无需翻译的短文本。
 - 自动翻译规则：URL 通配符或正则。
 - 术语表：`source => target`。

@@ -223,8 +223,9 @@ deepseek-chat"></textarea>
             <label class="fieldRow">
               <span class="fieldLabel" data-i18n="renderMode">▣ 译文渲染方式</span>
               <select id="renderMode">
-                <option value="inline" data-i18n="renderInline">源元素内追加译文</option>
-                <option value="block" data-i18n="renderBlock">块元素复制一份并替换为译文</option>
+                <option value="replace" data-i18n="renderReplace">译文覆盖原文（仅显示译文）</option>
+                <option value="inline" data-i18n="renderInline">源元素内追加译文（双语）</option>
+                <option value="block" data-i18n="renderBlock">块元素复制一份并显示译文（双语）</option>
               </select>
             </label>
 

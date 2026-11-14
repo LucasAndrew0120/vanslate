@@ -209,7 +209,7 @@
     sourceLanguage: "auto",
     targetLanguage: "\u4E2D\u6587",
     preserveOriginal: true,
-    renderMode: "inline",
+    renderMode: "replace",
     translationColorEnabled: false,
     translationColor: "",
     translationCss: "",

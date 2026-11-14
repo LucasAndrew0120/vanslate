@@ -1,4 +1,4 @@
-export type RenderMode = "inline" | "block";
+export type RenderMode = "inline" | "block" | "replace";
 export type ToolModelMode = "inherit" | "custom";
 export type FloatingBallMode = "always" | "hidden" | "hover";
 export type ReasoningEffort = "auto" | "minimal" | "low" | "medium" | "high";

@@ -21,6 +21,16 @@
   margin-left: 0;
 }
 
+/* Replace mode: keep the original nodes for retry/clear but hide them. */
+.vanslate-original[hidden] {
+  display: none !important;
+}
+
+.vanslate-result.is-replace-result {
+  display: inline;
+  margin-left: 0;
+}
+
 .vanslate-loading {
   display: inline-block;
   width: 0.9em;

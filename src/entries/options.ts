@@ -18,7 +18,7 @@ const DEFAULT_SETTINGS = {
   sourceLanguage: "auto",
   targetLanguage: "中文",
   preserveOriginal: true,
-  renderMode: "inline",
+  renderMode: "replace",
   translationColorEnabled: false,
   translationColor: "",
   translationCss: "",
@@ -232,7 +232,7 @@ async function loadSettings() {
   ensureSelectOption(fields.targetLanguage, settings.targetLanguage || "中文");
   fields.sourceLanguage.value = settings.sourceLanguage || "auto";
   fields.targetLanguage.value = settings.targetLanguage;
-  fields.renderMode.value = settings.renderMode === "block" ? "block" : "inline";
+  fields.renderMode.value = settings.renderMode === "block" ? "block" : settings.renderMode === "inline" ? "inline" : "replace";
   fields.translationColorEnabled.checked = Boolean(settings.translationColorEnabled);
   fields.translationColor.value = settings.translationColor || "#1d6fb8";
   fields.translationCss.value = settings.translationCss || "";
@@ -268,7 +268,7 @@ async function saveSettings() {
     sourceLanguage: fields.sourceLanguage.value.trim() || "auto",
     targetLanguage: fields.targetLanguage.value.trim(),
     preserveOriginal: true,
-    renderMode: fields.renderMode.value === "block" ? "block" : "inline",
+    renderMode: fields.renderMode.value === "block" ? "block" : fields.renderMode.value === "inline" ? "inline" : "replace",
     translationColorEnabled: fields.translationColorEnabled.checked,
     translationColor: fields.translationColor.value,
     translationCss: fields.translationCss.value.trim(),

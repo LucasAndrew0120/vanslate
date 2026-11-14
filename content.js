@@ -117,6 +117,7 @@
   // src/entries/content.ts
   var ext = globalThis.browser || chrome;
   var TRANSLATION_CLASS = "vanslate-result";
+  var ORIGINAL_CLASS = "vanslate-original";
   var LOADING_CLASS = "vanslate-loading";
   var TOOLBAR_ID = "vanslate-toolbar";
   var PANEL_ID = "vanslate-selection-panel";
@@ -156,7 +157,7 @@
   };
   var extensionContextInvalidated = false;
   var currentSettings = {
-    renderMode: "inline",
+    renderMode: "replace",
     translationColorEnabled: false,
     translationColor: "",
     translationCss: "",
@@ -527,6 +528,10 @@
     translatedCount += 1;
   }
   function renderTranslation(element, text, settings) {
+    if (settings.renderMode === "replace") {
+      replaceWithTranslation(element, text, settings);
+      return;
+    }
     if (settings.renderMode === "block" && isBlockElement(element)) {
       appendBlockClone(element, text, settings);
       return;
@@ -536,6 +541,38 @@
     setTranslationContent(translationNode, text, element);
     applyTranslationStyle(translationNode, settings);
     appendInlineResult(element, translationNode);
+  }
+  function replaceWithTranslation(element, text, settings) {
+    restoreReplacedContent(element);
+    const translationNode = document.createElement("span");
+    translationNode.className = `${TRANSLATION_CLASS} is-replace-result`;
+    setTranslationContent(translationNode, text, element);
+    applyTranslationStyle(translationNode, settings);
+    const holder = document.createElement("span");
+    holder.className = ORIGINAL_CLASS;
+    holder.hidden = true;
+    const artifacts = [];
+    Array.from(element.childNodes).forEach((node) => {
+      if (node instanceof HTMLElement && matchesTranslationArtifact(node)) {
+        artifacts.push(node);
+        return;
+      }
+      holder.appendChild(node);
+    });
+    artifacts.forEach((node) => node.remove());
+    element.appendChild(holder);
+    appendInlineResult(element, translationNode);
+  }
+  function matchesTranslationArtifact(node) {
+    return node.matches(`.${TRANSLATION_CLASS}, .${LOADING_CLASS}, .vanslate-inline-row, .vanslate-error-retry`);
+  }
+  function restoreReplacedContent(root) {
+    root.querySelectorAll(`.${ORIGINAL_CLASS}`).forEach((holder) => {
+      const parent = holder.parentElement;
+      if (!parent) return;
+      while (holder.firstChild) parent.insertBefore(holder.firstChild, holder);
+      holder.remove();
+    });
   }
   function appendBlockClone(element, text, settings) {
     const clone = element.cloneNode(true);
@@ -614,6 +651,7 @@
     virtualCollectQueued = false;
     virtualCollectInFlight = false;
     document.querySelectorAll(`[${CLONE_ATTR}], .${TRANSLATION_CLASS}, .${LOADING_CLASS}, .vanslate-inline-row`).forEach((node) => node.remove());
+    restoreReplacedContent(document);
     document.querySelectorAll(`[${STATE_ATTR}]`).forEach((node) => {
       node.removeAttribute(STATE_ATTR);
       node.removeAttribute(ID_ATTR);
@@ -1372,11 +1410,14 @@ Total: ${usage.total_tokens || 0}`;
       return display === "block" || display === "list-item" || display === "flex" || display === "grid";
     });
   }
+  function normalizeRenderMode(value) {
+    return value === "inline" || value === "block" ? value : "replace";
+  }
   async function loadRenderSettings() {
     const response = await safeRuntimeSendMessage({ type: "GET_SETTINGS" });
     const settings = response?.settings || {};
     const renderSettings = {
-      renderMode: settings.renderMode === "block" ? "block" : "inline",
+      renderMode: normalizeRenderMode(settings.renderMode),
       translationColorEnabled: Boolean(settings.translationColorEnabled),
       translationColor: settings.translationColor || "",
       translationCss: settings.translationCss || "",

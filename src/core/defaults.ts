@@ -214,7 +214,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   sourceLanguage: "auto",
   targetLanguage: "中文",
   preserveOriginal: true,
-  renderMode: "inline",
+  renderMode: "replace",
   translationColorEnabled: false,
   translationColor: "",
   translationCss: "",
