@@ -1,6 +1,22 @@
 export type RenderMode = "inline" | "block";
 export type ToolModelMode = "inherit" | "custom";
 export type FloatingBallMode = "always" | "hidden" | "hover";
+export type ReasoningEffort = "auto" | "minimal" | "low" | "medium" | "high";
+export type ReasoningDialect = "auto" | "openai" | "thinking" | "enable_thinking";
+export type ToolReasoningMode = "inherit" | "on" | "off";
+
+/**
+ * Controls the optional reasoning/thinking parameters that are sent with each
+ * chat completion request. `off` keeps the request body untouched for unknown
+ * providers, while known thinking dialects (DeepSeek / GLM / Qwen) receive an
+ * explicit disable flag so page translation does not pay for hidden reasoning.
+ */
+export interface ReasoningSettings {
+  enabled: boolean;
+  effort: ReasoningEffort;
+  dialect: ReasoningDialect;
+  applyToTranslation: boolean;
+}
 
 export interface Usage {
   prompt_tokens: number;
@@ -13,6 +29,7 @@ export interface SelectionTool {
   name: string;
   enabled: boolean;
   modelMode: ToolModelMode;
+  reasoningMode: ToolReasoningMode;
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -54,6 +71,7 @@ export interface ExtensionSettings {
   autoTranslateRules: string;
   glossary: string;
   retryCount: number;
+  reasoning: ReasoningSettings;
   enableFloatingBall: boolean;
   floatingBallMode: FloatingBallMode;
   floatingBallPosition: {
@@ -97,6 +115,7 @@ export interface ChatRequest {
   temperature: number;
   messages: ChatMessage[];
   retryCount: number;
+  reasoning?: ReasoningSettings | null;
 }
 
 export interface ChatResponse {

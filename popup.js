@@ -11,7 +11,8 @@
     "Keep the output natural for a bilingual web reading experience.",
     "Keep compact number+unit or number+currency tokens unchanged, such as 2MB, 3RMB, 15GB, 20ms, and 10USD.",
     "Keep standalone numbers, versions, dates, times, URLs, emails, file paths, commands, keyboard shortcuts, hashes, IDs, selectors, and dimensions unchanged.",
-    'If an item contains simple inline HTML tags such as <strong>, <em>, <b>, <i>, <code>, <mark>, <sub>, <sup>, or <span style="color:red">, preserve the same tags and safe inline styles around the corresponding translated text.',
+    'If an item contains simple inline HTML tags such as <strong>, <em>, <b>, <i>, <code>, <mark>, <sub>, <sup>, <a href="https://example.com">link</a>, or <span style="color:red">, preserve the same tags and safe inline styles around the corresponding translated text.',
+    "For links, keep the exact href attribute value unchanged so the translated link still points to the same target.",
     "If an item mixes the target language with other languages, keep the parts already in the target language unchanged and translate only the non-target-language parts.",
     "If a short technical token, product name, URL, API name, model name, variable, or code-like fragment is already suitable in the target-language context, keep it unchanged.",
     "{glossaryBlock}",
@@ -26,6 +27,7 @@
       name: "\u7FFB\u8BD1",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -39,6 +41,7 @@
       name: "\u5C0F\u767D\u89E3\u91CA",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -52,6 +55,7 @@
       name: "\u4E13\u4E1A\u89E3\u91CA",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -65,6 +69,7 @@
       name: "\u603B\u7ED3",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -78,6 +83,7 @@
       name: "\u6539\u5199",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -91,6 +97,7 @@
       name: "\u6280\u672F\u5316",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -104,6 +111,7 @@
       name: "\u53E3\u8BED\u5316",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -117,6 +125,7 @@
       name: "\u5B66\u672F\u5316",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -130,6 +139,7 @@
       name: "\u4EE3\u7801\u6CE8\u91CA\u5316",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -166,6 +176,7 @@
         name: String(tool?.name || `\u5DE5\u5177 ${index + 1}`).trim(),
         enabled: tool?.enabled !== false,
         modelMode: tool?.modelMode === "custom" ? "custom" : "inherit",
+        reasoningMode: normalizeToolReasoningMode(tool?.reasoningMode),
         baseUrl: String(tool?.baseUrl || "").trim().replace(/\/+$/, ""),
         apiKey: String(tool?.apiKey || "").trim(),
         model,
@@ -176,6 +187,11 @@
       };
     }).filter((tool) => tool.id && tool.name && tool.userPrompt);
     return normalized.length ? normalized : DEFAULT_SELECTION_TOOLS;
+  }
+  function normalizeToolReasoningMode(value) {
+    const mode = String(value || "").trim().toLowerCase();
+    if (mode === "on" || mode === "off") return mode;
+    return "inherit";
   }
 
   // src/core/storage-keys.ts

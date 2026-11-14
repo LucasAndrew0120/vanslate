@@ -3,7 +3,7 @@ declare const VanslateI18n: any;
 
 import { maskSecret, readStorageValues, writeStorageValues } from "../core/storage-keys";
 import { DEFAULT_SKIP_RULES } from "../core/defaults";
-import { validateTranslationSkipRules } from "../core/utils";
+import { normalizeReasoningDialect, normalizeReasoningEffort, normalizeToolReasoningMode, validateTranslationSkipRules } from "../core/utils";
 import { createTranslationCssTemplatePicker } from "./options-css-templates";
 
 const ext = (globalThis as any).browser || chrome;
@@ -27,6 +27,12 @@ const DEFAULT_SETTINGS = {
   autoTranslateRules: "",
   glossary: "",
   retryCount: 2,
+  reasoning: {
+    enabled: false,
+    effort: "auto",
+    dialect: "auto",
+    applyToTranslation: false
+  },
   enableFloatingBall: true,
   floatingBallMode: "always",
   floatingBallPosition: {
@@ -84,6 +90,10 @@ const fields = {
   autoTranslateRules: document.querySelector("#autoTranslateRules"),
   glossary: document.querySelector("#glossary"),
   retryCount: document.querySelector("#retryCount"),
+  reasoningEnabled: document.querySelector("#reasoningEnabled"),
+  reasoningEffort: document.querySelector("#reasoningEffort"),
+  reasoningDialect: document.querySelector("#reasoningDialect"),
+  reasoningApplyToTranslation: document.querySelector("#reasoningApplyToTranslation"),
   translationSystemPrompt: document.querySelector("#translationSystemPrompt"),
   translationUserPrompt: document.querySelector("#translationUserPrompt"),
   collectionRules: document.querySelector("#collectionRules"),
@@ -165,6 +175,7 @@ addSelectionToolBtn.addEventListener("click", () => {
     name: t("customTool"),
     enabled: true,
     modelMode: "inherit",
+    reasoningMode: "inherit",
     baseUrl: "",
     apiKey: "",
     model: "",
@@ -231,6 +242,10 @@ async function loadSettings() {
   fields.autoTranslateRules.value = settings.autoTranslateRules || "";
   fields.glossary.value = settings.glossary || "";
   fields.retryCount.value = String(settings.retryCount ?? 2);
+  fields.reasoningEnabled.checked = Boolean(settings.reasoning?.enabled);
+  fields.reasoningEffort.value = normalizeReasoningEffort(settings.reasoning?.effort);
+  fields.reasoningDialect.value = normalizeReasoningDialect(settings.reasoning?.dialect);
+  fields.reasoningApplyToTranslation.checked = Boolean(settings.reasoning?.applyToTranslation);
   fields.translationSystemPrompt.value = defaults.translationSystemPrompt || "";
   fields.translationUserPrompt.value = defaults.translationUserPrompt || "";
   fields.collectionRules.value = stringifyCollectionRules(settings.collectionRules || defaults.collectionRules);
@@ -264,6 +279,12 @@ async function saveSettings() {
     autoTranslateRules: fields.autoTranslateRules.value.trim(),
     glossary: fields.glossary.value.trim(),
     retryCount: Math.max(0, Math.min(5, Number(fields.retryCount.value) || 0)),
+    reasoning: {
+      enabled: fields.reasoningEnabled.checked,
+      effort: normalizeReasoningEffort(fields.reasoningEffort.value),
+      dialect: normalizeReasoningDialect(fields.reasoningDialect.value),
+      applyToTranslation: fields.reasoningApplyToTranslation.checked
+    },
     translationSystemPrompt: defaults.translationSystemPrompt || "",
     translationUserPrompt: defaults.translationUserPrompt || "",
     collectionRules: parseCollectionRules(fields.collectionRules.value, defaults.collectionRules),
@@ -358,6 +379,11 @@ function renderSelectionToolsEditor() {
       createToolSelect(t("toolModelSource"), tool.modelMode, "modelMode", index, [
         ["inherit", t("inheritGlobal")],
         ["custom", t("customModel")]
+      ]),
+      createToolSelect(t("toolReasoning"), normalizeToolReasoningMode(tool.reasoningMode), "reasoningMode", index, [
+        ["inherit", t("inheritGlobal")],
+        ["on", t("reasoningOn")],
+        ["off", t("reasoningOff")]
       ]),
       createToolInput(t("toolDefaultModel"), tool.activeModel || tool.model, "model", index),
       createToolInput(t("toolApiUrl"), tool.baseUrl, "baseUrl", index, { placeholder: t("leaveBlankInherit") }),
@@ -504,6 +530,7 @@ function syncSelectionToolsFromEditor() {
       name: inputs[0]?.value.trim() || "",
       id: inputs[1]?.value.trim() || `tool_${index + 1}`,
       modelMode: selects[0]?.value === "custom" ? "custom" : "inherit",
+      reasoningMode: normalizeToolReasoningMode(selects[1]?.value),
       model,
       activeModel: model,
       baseUrl: inputs[3]?.value.trim().replace(/\/+$/, "") || "",
@@ -555,6 +582,7 @@ function normalizeTool(tool, index) {
     name: String(tool?.name || `${t("tools")} ${index + 1}`).trim(),
     enabled: tool?.enabled !== false,
     modelMode: tool?.modelMode === "custom" ? "custom" : "inherit",
+    reasoningMode: normalizeToolReasoningMode(tool?.reasoningMode),
     baseUrl: String(tool?.baseUrl || "").trim().replace(/\/+$/, ""),
     apiKey: String(tool?.apiKey || "").trim(),
     model,
@@ -624,7 +652,13 @@ function collectSettingsForDebug() {
     sourceLanguage: fields.sourceLanguage.value.trim() || "auto",
     targetLanguage: fields.targetLanguage.value.trim(),
     glossary: fields.glossary.value.trim(),
-    retryCount: Math.max(0, Math.min(5, Number(fields.retryCount.value) || 0))
+    retryCount: Math.max(0, Math.min(5, Number(fields.retryCount.value) || 0)),
+    reasoning: {
+      enabled: fields.reasoningEnabled.checked,
+      effort: normalizeReasoningEffort(fields.reasoningEffort.value),
+      dialect: normalizeReasoningDialect(fields.reasoningDialect.value),
+      applyToTranslation: fields.reasoningApplyToTranslation.checked
+    }
   };
 }
 

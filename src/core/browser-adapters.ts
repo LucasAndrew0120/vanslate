@@ -1,7 +1,7 @@
 import { DEFAULT_SETTINGS, DEFAULT_TRANSLATION_SYSTEM_PROMPT, DEFAULT_TRANSLATION_USER_PROMPT } from "./defaults";
 import type { ExtensionSettings, ProgressSink, TranslateTextContext, TranslationCacheMap, TranslationCacheStore } from "./types";
 import { readStorageValues } from "./storage-keys";
-import { compact, normalizeSelectionTools, normalizeTranslationSkipRules } from "./utils";
+import { compact, normalizeReasoningSettings, normalizeSelectionTools, normalizeTranslationSkipRules } from "./utils";
 
 export const CACHE_KEY = "vv_vanslate_translation_cache";
 export const MAX_CACHE_ITEMS = 800;
@@ -20,6 +20,7 @@ export class BrowserSettingsRepository {
     settings.translationSystemPrompt = DEFAULT_TRANSLATION_SYSTEM_PROMPT;
     settings.translationUserPrompt = DEFAULT_TRANSLATION_USER_PROMPT;
     settings.skipRules = normalizeTranslationSkipRules(settings.skipRules);
+    settings.reasoning = normalizeReasoningSettings(settings.reasoning);
     settings.selectionTools = normalizeSelectionTools(settings.selectionTools);
     return settings;
   }

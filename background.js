@@ -11,7 +11,8 @@
     "Keep the output natural for a bilingual web reading experience.",
     "Keep compact number+unit or number+currency tokens unchanged, such as 2MB, 3RMB, 15GB, 20ms, and 10USD.",
     "Keep standalone numbers, versions, dates, times, URLs, emails, file paths, commands, keyboard shortcuts, hashes, IDs, selectors, and dimensions unchanged.",
-    'If an item contains simple inline HTML tags such as <strong>, <em>, <b>, <i>, <code>, <mark>, <sub>, <sup>, or <span style="color:red">, preserve the same tags and safe inline styles around the corresponding translated text.',
+    'If an item contains simple inline HTML tags such as <strong>, <em>, <b>, <i>, <code>, <mark>, <sub>, <sup>, <a href="https://example.com">link</a>, or <span style="color:red">, preserve the same tags and safe inline styles around the corresponding translated text.',
+    "For links, keep the exact href attribute value unchanged so the translated link still points to the same target.",
     "If an item mixes the target language with other languages, keep the parts already in the target language unchanged and translate only the non-target-language parts.",
     "If a short technical token, product name, URL, API name, model name, variable, or code-like fragment is already suitable in the target-language context, keep it unchanged.",
     "{glossaryBlock}",
@@ -26,6 +27,7 @@
       name: "\u7FFB\u8BD1",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -39,6 +41,7 @@
       name: "\u5C0F\u767D\u89E3\u91CA",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -52,6 +55,7 @@
       name: "\u4E13\u4E1A\u89E3\u91CA",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -65,6 +69,7 @@
       name: "\u603B\u7ED3",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -78,6 +83,7 @@
       name: "\u6539\u5199",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -91,6 +97,7 @@
       name: "\u6280\u672F\u5316",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -104,6 +111,7 @@
       name: "\u53E3\u8BED\u5316",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -117,6 +125,7 @@
       name: "\u5B66\u672F\u5316",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -130,6 +139,7 @@
       name: "\u4EE3\u7801\u6CE8\u91CA\u5316",
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -183,6 +193,12 @@
       "^(?:USB-C|Wi-?Fi\\s?\\dE?|Bluetooth\\s?\\d(?:\\.\\d)?)$"
     ]
   };
+  var DEFAULT_REASONING_SETTINGS = {
+    enabled: false,
+    effort: "auto",
+    dialect: "auto",
+    applyToTranslation: false
+  };
   var DEFAULT_SETTINGS = {
     baseUrl: "https://api.openai.com/v1",
     apiKey: "",
@@ -202,6 +218,7 @@
     autoTranslateRules: "",
     glossary: "",
     retryCount: 2,
+    reasoning: DEFAULT_REASONING_SETTINGS,
     enableFloatingBall: true,
     floatingBallMode: "always",
     floatingBallPosition: {
@@ -374,6 +391,7 @@
         name: String(tool?.name || `\u5DE5\u5177 ${index + 1}`).trim(),
         enabled: tool?.enabled !== false,
         modelMode: tool?.modelMode === "custom" ? "custom" : "inherit",
+        reasoningMode: normalizeToolReasoningMode(tool?.reasoningMode),
         baseUrl: String(tool?.baseUrl || "").trim().replace(/\/+$/, ""),
         apiKey: String(tool?.apiKey || "").trim(),
         model,
@@ -384,6 +402,63 @@
       };
     }).filter((tool) => tool.id && tool.name && tool.userPrompt);
     return normalized.length ? normalized : DEFAULT_SELECTION_TOOLS;
+  }
+  function normalizeReasoningSettings(value) {
+    const source = value && typeof value === "object" ? value : {};
+    return {
+      enabled: source.enabled === true,
+      effort: normalizeReasoningEffort(source.effort),
+      dialect: normalizeReasoningDialect(source.dialect),
+      applyToTranslation: source.applyToTranslation === true
+    };
+  }
+  function normalizeReasoningEffort(value) {
+    const effort = String(value || "").trim().toLowerCase();
+    return ["minimal", "low", "medium", "high"].includes(effort) ? effort : "auto";
+  }
+  function normalizeReasoningDialect(value) {
+    const dialect = String(value || "").trim().toLowerCase();
+    return ["openai", "thinking", "enable_thinking"].includes(dialect) ? dialect : "auto";
+  }
+  function normalizeToolReasoningMode(value) {
+    const mode = String(value || "").trim().toLowerCase();
+    if (mode === "on" || mode === "off") return mode;
+    return "inherit";
+  }
+  function detectReasoningDialect(endpoint, model) {
+    const target = `${String(endpoint || "")} ${String(model || "")}`.toLowerCase();
+    if (/deepseek|bigmodel|zhipu|glm|longcat/.test(target)) return "thinking";
+    if (/dashscope|aliyun|siliconflow|modelscope|qwen|qwq|hunyuan|stepfun/.test(target)) return "enable_thinking";
+    return "openai";
+  }
+  function resolveReasoningDialect(dialect, endpoint, model) {
+    return dialect === "auto" ? detectReasoningDialect(endpoint, model) : dialect;
+  }
+  function buildReasoningParams(reasoning, endpoint, model) {
+    if (!reasoning) return {};
+    const config = normalizeReasoningSettings(reasoning);
+    const dialect = resolveReasoningDialect(config.dialect, endpoint, model);
+    const params = {};
+    if (dialect === "thinking") {
+      params.thinking = { type: config.enabled ? "enabled" : "disabled" };
+    } else if (dialect === "enable_thinking") {
+      params.enable_thinking = config.enabled;
+    }
+    if (config.enabled && config.effort !== "auto" && dialect !== "enable_thinking") {
+      params.reasoning_effort = config.effort;
+    }
+    return params;
+  }
+  function resolveTranslationReasoning(settings) {
+    const base = normalizeReasoningSettings(settings.reasoning);
+    return { ...base, enabled: Boolean(base.enabled && base.applyToTranslation) };
+  }
+  function resolveToolReasoning(settings, tool) {
+    const base = normalizeReasoningSettings(settings.reasoning);
+    const mode = normalizeToolReasoningMode(tool?.reasoningMode);
+    if (mode === "on") return { ...base, enabled: true };
+    if (mode === "off") return { ...base, enabled: false };
+    return base;
   }
   function resolveToolModelSettings(settings, tool) {
     if (tool?.modelMode !== "custom") {
@@ -463,16 +538,24 @@
     };
   }
   function cacheKey(text, settings) {
-    return hashString([
+    const parts = [
       settings.baseUrl,
       settings.model,
       settings.sourceLanguage,
       settings.targetLanguage,
       settings.glossary,
       settings.translationSystemPrompt,
-      settings.translationUserPrompt,
-      text
-    ].join("\n"));
+      settings.translationUserPrompt
+    ];
+    const signature = reasoningCacheSignature(settings);
+    if (signature) parts.push(signature);
+    parts.push(text);
+    return hashString(parts.join("\n"));
+  }
+  function reasoningCacheSignature(settings) {
+    const reasoning = normalizeReasoningSettings(settings.reasoning);
+    if (!reasoning.enabled || !reasoning.applyToTranslation) return "";
+    return `reasoning:${reasoning.dialect}:${reasoning.effort}`;
   }
   function sourceLanguagePrompt(sourceLanguage) {
     const source = String(sourceLanguage || "auto").trim();
@@ -681,6 +764,7 @@
       settings.translationSystemPrompt = DEFAULT_TRANSLATION_SYSTEM_PROMPT;
       settings.translationUserPrompt = DEFAULT_TRANSLATION_USER_PROMPT;
       settings.skipRules = normalizeTranslationSkipRules(settings.skipRules);
+      settings.reasoning = normalizeReasoningSettings(settings.reasoning);
       settings.selectionTools = normalizeSelectionTools(settings.selectionTools);
       return settings;
     }
@@ -819,6 +903,27 @@
   };
 
   // src/core/chat-client.ts
+  function buildChatRequestBody(request) {
+    return {
+      model: request.model,
+      temperature: request.temperature,
+      messages: request.messages,
+      ...buildReasoningParams(request.reasoning, request.endpoint, request.model)
+    };
+  }
+  var REASONING_BODY_KEYS = ["thinking", "enable_thinking", "reasoning_effort"];
+  function stripRejectedReasoningParams(body, error) {
+    const status = Number(error?.status) || 0;
+    if (status && status !== 400 && status !== 422) return null;
+    const message = readableError(error).toLowerCase();
+    const rejected = REASONING_BODY_KEYS.filter((key) => key in body && message.includes(key));
+    if (!rejected.length) return null;
+    const fallback = { ...body };
+    rejected.forEach((key) => {
+      delete fallback[key];
+    });
+    return fallback;
+  }
   var OpenAICompatibleChatClient = class {
     constructor(fetchImpl = globalThis.fetch.bind(globalThis), sleepImpl = sleep, retryBaseDelayMs = 1e3) {
       this.fetchImpl = fetchImpl;
@@ -826,24 +931,37 @@
       this.retryBaseDelayMs = retryBaseDelayMs;
     }
     async complete(request) {
-      const payload = await this.fetchJsonWithRetry(request.endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${request.apiKey}`
-        },
-        body: JSON.stringify({
-          model: request.model,
-          temperature: request.temperature,
-          messages: request.messages
-        })
-      }, request.retryCount);
+      const payload = await this.postChat(request);
       const message = payload?.choices?.[0]?.message || {};
       return {
         message,
         content: String(message.content || "").trim(),
         usage: normalizeUsage(payload?.usage),
         raw: payload
+      };
+    }
+    async postChat(request) {
+      const body = buildChatRequestBody(request);
+      try {
+        return await this.fetchJsonWithRetry(request.endpoint, this.requestInit(request, body), request.retryCount);
+      } catch (error) {
+        const fallbackBody = stripRejectedReasoningParams(body, error);
+        if (!fallbackBody) throw error;
+        return this.fetchJsonWithRetry(
+          request.endpoint,
+          this.requestInit(request, fallbackBody),
+          Math.min(request.retryCount, 1)
+        );
+      }
+    }
+    requestInit(request, body) {
+      return {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${request.apiKey}`
+        },
+        body: JSON.stringify(body)
       };
     }
     async fetchJsonWithRetry(endpoint, request, retryCount) {
@@ -1036,19 +1154,31 @@
       validateModelSettings(effective);
       const messages = buildToolMessages(tool, promptVars);
       const endpoint = joinUrl(effective.baseUrl, "/chat/completions");
+      const reasoning = resolveToolReasoning(settings, tool);
+      const body = buildChatRequestBody({
+        endpoint,
+        apiKey: effective.apiKey,
+        model: effective.model,
+        temperature: 0.3,
+        messages,
+        retryCount: Number(settings.retryCount) || 0,
+        reasoning
+      });
       const response = await this.chatClient.complete({
         endpoint,
         apiKey: effective.apiKey,
         model: effective.model,
         temperature: 0.3,
         messages,
-        retryCount: Number(settings.retryCount) || 0
+        retryCount: Number(settings.retryCount) || 0,
+        reasoning
       });
       return {
         request: {
           endpoint,
           model: effective.model,
-          messages
+          messages,
+          body
         },
         output: response.content,
         reasoning: extractReasoning(response.message),
@@ -1067,6 +1197,7 @@
         model: settings.model,
         temperature: 0.2,
         retryCount: Number(settings.retryCount) || 0,
+        reasoning: resolveToolReasoning(settings, null),
         messages: [
           {
             role: "system",
@@ -1124,6 +1255,7 @@ ${glossary.map((item) => `${item.source} => ${item.target}`).join("\n")}` : "No 
         model: settings.model,
         temperature: 0.2,
         retryCount: Number(settings.retryCount) || 0,
+        reasoning: resolveTranslationReasoning(settings),
         messages: [
           {
             role: "system",
@@ -1137,6 +1269,17 @@ ${glossary.map((item) => `${item.source} => ${item.target}`).join("\n")}` : "No 
       });
       const translations = parseTranslations(response.content);
       if (translations.length !== texts.length) {
+        if (texts.length > 1) {
+          const middle = Math.ceil(texts.length / 2);
+          const [left, right] = await Promise.all([
+            this.translateBatch(texts.slice(0, middle), settings),
+            this.translateBatch(texts.slice(middle), settings)
+          ]);
+          return {
+            translations: [...left.translations, ...right.translations],
+            usage: addUsage(left.usage, right.usage)
+          };
+        }
         throw new Error("The model returned an unexpected translation count.");
       }
       return {
@@ -1154,7 +1297,8 @@ ${glossary.map((item) => `${item.source} => ${item.target}`).join("\n")}` : "No 
         model: effective.model,
         temperature: 0.3,
         messages,
-        retryCount: Number(settings.retryCount) || 0
+        retryCount: Number(settings.retryCount) || 0,
+        reasoning: resolveToolReasoning(settings, tool)
       });
     }
     promptVars(settings, text) {

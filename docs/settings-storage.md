@@ -52,6 +52,33 @@ API Key 只存在本地扩展存储中。写入 `chrome.storage.local` 前会通
 4. 为核心行为补单元测试。
 5. 如果字段影响模型输出，加入缓存 key。
 
+## 思考 / 推理参数
+
+`reasoning` 是结构化的设置对象，用于控制 Chat Completions 请求是否携带思考参数：
+
+```json
+{
+  "enabled": false,
+  "effort": "auto",
+  "dialect": "auto",
+  "applyToTranslation": false
+}
+```
+
+- `enabled`：是否开启思考。默认 `false`。
+- `effort`：`auto | minimal | low | medium | high`。`auto` 只发送方言开关，不写 `reasoning_effort`。
+- `dialect`：`auto | openai | thinking | enable_thinking`。`auto` 按 Base URL 和模型名识别：DeepSeek / GLM 走 `thinking.type`，Qwen / DashScope / SiliconFlow 走 `enable_thinking`，其余走 OpenAI 的 `reasoning_effort`。
+- `applyToTranslation`：全文翻译是否也使用思考。默认 `false`，因为全文翻译逐批调用，思考会显著增加耗时和费用。
+
+行为约定：
+
+- 请求体只在调用方明确传入 `reasoning` 时才会附加思考字段，未配置时保持 `model` + `temperature` + `messages` 三个字段不变。
+- 关闭思考时，对已识别的 thinking 方言（DeepSeek、GLM、Qwen）主动发送关闭参数，因为这些接口默认开启思考。
+- 未识别的 OpenAI 兼容接口不发送任何额外字段，避免严格实现返回 400。
+- 如果网关仍以 400/422 拒绝思考字段（错误信息中包含 `thinking`、`enable_thinking` 或 `reasoning_effort`），客户端会自动去掉这些字段重试一次。
+- 划词工具可用 `reasoningMode`（`inherit | on | off`）覆盖全局开关。
+- 只有当 `enabled && applyToTranslation` 时，思考配置才参与缓存 key，升级后已有翻译缓存继续有效。
+
 ## 跳过翻译规则
 
 `skipRules` 是用户可编辑 JSON：

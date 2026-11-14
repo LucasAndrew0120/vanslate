@@ -23,11 +23,14 @@ import {
   readableError,
   renderTemplate,
   resolveToolModelSettings,
+  resolveToolReasoning,
+  resolveTranslationReasoning,
   shouldSkipTranslation,
   sourceLanguagePrompt,
   validateModelSettings,
   zeroUsage
 } from "./utils";
+import { buildChatRequestBody } from "./chat-client";
 
 const VANSLATE_TRANSLATION_BATCH_SIZE = 4;
 const VANSLATE_TRANSLATION_CONCURRENCY = 2;
@@ -196,19 +199,31 @@ export class TranslationService {
     validateModelSettings(effective);
     const messages = buildToolMessages(tool, promptVars);
     const endpoint = joinUrl(effective.baseUrl, "/chat/completions");
+    const reasoning = resolveToolReasoning(settings, tool);
+    const body = buildChatRequestBody({
+      endpoint,
+      apiKey: effective.apiKey,
+      model: effective.model,
+      temperature: 0.3,
+      messages,
+      retryCount: Number(settings.retryCount) || 0,
+      reasoning
+    });
     const response = await this.chatClient.complete({
       endpoint,
       apiKey: effective.apiKey,
       model: effective.model,
       temperature: 0.3,
       messages,
-      retryCount: Number(settings.retryCount) || 0
+      retryCount: Number(settings.retryCount) || 0,
+      reasoning
     });
     return {
       request: {
         endpoint,
         model: effective.model,
-        messages
+        messages,
+        body
       },
       output: response.content,
       reasoning: extractReasoning(response.message),
@@ -229,6 +244,7 @@ export class TranslationService {
       model: settings.model,
       temperature: 0.2,
       retryCount: Number(settings.retryCount) || 0,
+      reasoning: resolveToolReasoning(settings, null),
       messages: [
         {
           role: "system",
@@ -291,6 +307,7 @@ export class TranslationService {
       model: settings.model,
       temperature: 0.2,
       retryCount: Number(settings.retryCount) || 0,
+      reasoning: resolveTranslationReasoning(settings),
       messages: [
         {
           role: "system",
@@ -305,6 +322,19 @@ export class TranslationService {
 
     const translations = parseTranslations(response.content);
     if (translations.length !== texts.length) {
+      // Models occasionally drop or merge an item. Splitting the batch keeps
+      // the rest of the page translated instead of failing all items at once.
+      if (texts.length > 1) {
+        const middle = Math.ceil(texts.length / 2);
+        const [left, right] = await Promise.all([
+          this.translateBatch(texts.slice(0, middle), settings),
+          this.translateBatch(texts.slice(middle), settings)
+        ]);
+        return {
+          translations: [...left.translations, ...right.translations],
+          usage: addUsage(left.usage, right.usage)
+        };
+      }
       throw new Error("The model returned an unexpected translation count.");
     }
     return {
@@ -323,7 +353,8 @@ export class TranslationService {
       model: effective.model,
       temperature: 0.3,
       messages,
-      retryCount: Number(settings.retryCount) || 0
+      retryCount: Number(settings.retryCount) || 0,
+      reasoning: resolveToolReasoning(settings, tool)
     });
   }
 

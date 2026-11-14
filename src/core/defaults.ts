@@ -1,4 +1,4 @@
-import type { ExtensionSettings, SelectionTool, TextCollectionRules, TranslationSkipRules } from "./types";
+import type { ExtensionSettings, ReasoningSettings, SelectionTool, TextCollectionRules, TranslationSkipRules } from "./types";
 
 export const DEFAULT_TRANSLATION_SYSTEM_PROMPT = [
   "You are Vanslate, a precise AI context translator and verbalizer.",
@@ -11,7 +11,8 @@ export const DEFAULT_TRANSLATION_USER_PROMPT = [
   "Keep the output natural for a bilingual web reading experience.",
   "Keep compact number+unit or number+currency tokens unchanged, such as 2MB, 3RMB, 15GB, 20ms, and 10USD.",
   "Keep standalone numbers, versions, dates, times, URLs, emails, file paths, commands, keyboard shortcuts, hashes, IDs, selectors, and dimensions unchanged.",
-  "If an item contains simple inline HTML tags such as <strong>, <em>, <b>, <i>, <code>, <mark>, <sub>, <sup>, or <span style=\"color:red\">, preserve the same tags and safe inline styles around the corresponding translated text.",
+  "If an item contains simple inline HTML tags such as <strong>, <em>, <b>, <i>, <code>, <mark>, <sub>, <sup>, <a href=\"https://example.com\">link</a>, or <span style=\"color:red\">, preserve the same tags and safe inline styles around the corresponding translated text.",
+  "For links, keep the exact href attribute value unchanged so the translated link still points to the same target.",
   "If an item mixes the target language with other languages, keep the parts already in the target language unchanged and translate only the non-target-language parts.",
   "If a short technical token, product name, URL, API name, model name, variable, or code-like fragment is already suitable in the target-language context, keep it unchanged.",
   "{glossaryBlock}",
@@ -27,6 +28,7 @@ export const DEFAULT_SELECTION_TOOLS: SelectionTool[] = [
     name: "翻译",
     enabled: true,
     modelMode: "inherit",
+    reasoningMode: "inherit",
     baseUrl: "",
     apiKey: "",
     model: "",
@@ -40,6 +42,7 @@ export const DEFAULT_SELECTION_TOOLS: SelectionTool[] = [
     name: "小白解释",
     enabled: true,
     modelMode: "inherit",
+    reasoningMode: "inherit",
     baseUrl: "",
     apiKey: "",
     model: "",
@@ -53,6 +56,7 @@ export const DEFAULT_SELECTION_TOOLS: SelectionTool[] = [
     name: "专业解释",
     enabled: true,
     modelMode: "inherit",
+    reasoningMode: "inherit",
     baseUrl: "",
     apiKey: "",
     model: "",
@@ -66,6 +70,7 @@ export const DEFAULT_SELECTION_TOOLS: SelectionTool[] = [
     name: "总结",
     enabled: true,
     modelMode: "inherit",
+    reasoningMode: "inherit",
     baseUrl: "",
     apiKey: "",
     model: "",
@@ -79,6 +84,7 @@ export const DEFAULT_SELECTION_TOOLS: SelectionTool[] = [
     name: "改写",
     enabled: true,
     modelMode: "inherit",
+    reasoningMode: "inherit",
     baseUrl: "",
     apiKey: "",
     model: "",
@@ -92,6 +98,7 @@ export const DEFAULT_SELECTION_TOOLS: SelectionTool[] = [
     name: "技术化",
     enabled: true,
     modelMode: "inherit",
+    reasoningMode: "inherit",
     baseUrl: "",
     apiKey: "",
     model: "",
@@ -105,6 +112,7 @@ export const DEFAULT_SELECTION_TOOLS: SelectionTool[] = [
     name: "口语化",
     enabled: true,
     modelMode: "inherit",
+    reasoningMode: "inherit",
     baseUrl: "",
     apiKey: "",
     model: "",
@@ -118,6 +126,7 @@ export const DEFAULT_SELECTION_TOOLS: SelectionTool[] = [
     name: "学术化",
     enabled: true,
     modelMode: "inherit",
+    reasoningMode: "inherit",
     baseUrl: "",
     apiKey: "",
     model: "",
@@ -131,6 +140,7 @@ export const DEFAULT_SELECTION_TOOLS: SelectionTool[] = [
     name: "代码注释化",
     enabled: true,
     modelMode: "inherit",
+    reasoningMode: "inherit",
     baseUrl: "",
     apiKey: "",
     model: "",
@@ -187,6 +197,13 @@ export const DEFAULT_SKIP_RULES: TranslationSkipRules = {
   ]
 };
 
+export const DEFAULT_REASONING_SETTINGS: ReasoningSettings = {
+  enabled: false,
+  effort: "auto",
+  dialect: "auto",
+  applyToTranslation: false
+};
+
 export const DEFAULT_SETTINGS: ExtensionSettings = {
   baseUrl: "https://api.openai.com/v1",
   apiKey: "",
@@ -206,6 +223,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   autoTranslateRules: "",
   glossary: "",
   retryCount: 2,
+  reasoning: DEFAULT_REASONING_SETTINGS,
   enableFloatingBall: true,
   floatingBallMode: "always",
   floatingBallPosition: {

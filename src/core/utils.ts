@@ -1,5 +1,15 @@
-import { DEFAULT_SELECTION_TOOLS, DEFAULT_SKIP_RULES } from "./defaults";
-import type { ExtensionSettings, ModelSettings, SelectionTool, TranslationSkipRules, Usage } from "./types";
+import { DEFAULT_REASONING_SETTINGS, DEFAULT_SELECTION_TOOLS, DEFAULT_SKIP_RULES } from "./defaults";
+import type {
+  ExtensionSettings,
+  ModelSettings,
+  ReasoningDialect,
+  ReasoningEffort,
+  ReasoningSettings,
+  SelectionTool,
+  ToolReasoningMode,
+  TranslationSkipRules,
+  Usage
+} from "./types";
 
 export function compact<T extends Record<string, unknown>>(value: T | null | undefined): Partial<T> {
   return Object.fromEntries(
@@ -39,6 +49,7 @@ export function normalizeSelectionTools(value: unknown): SelectionTool[] {
         name: String(tool?.name || `工具 ${index + 1}`).trim(),
         enabled: tool?.enabled !== false,
         modelMode: tool?.modelMode === "custom" ? "custom" : "inherit",
+        reasoningMode: normalizeToolReasoningMode(tool?.reasoningMode),
         baseUrl: String(tool?.baseUrl || "").trim().replace(/\/+$/, ""),
         apiKey: String(tool?.apiKey || "").trim(),
         model,
@@ -50,6 +61,95 @@ export function normalizeSelectionTools(value: unknown): SelectionTool[] {
     })
     .filter((tool: SelectionTool) => tool.id && tool.name && tool.userPrompt);
   return normalized.length ? normalized : DEFAULT_SELECTION_TOOLS;
+}
+
+export function normalizeReasoningSettings(value: unknown): ReasoningSettings {
+  const source = value && typeof value === "object" ? value as Record<string, unknown> : {};
+  return {
+    enabled: source.enabled === true,
+    effort: normalizeReasoningEffort(source.effort),
+    dialect: normalizeReasoningDialect(source.dialect),
+    applyToTranslation: source.applyToTranslation === true
+  };
+}
+
+export function normalizeReasoningEffort(value: unknown): ReasoningEffort {
+  const effort = String(value || "").trim().toLowerCase();
+  return ["minimal", "low", "medium", "high"].includes(effort) ? effort as ReasoningEffort : "auto";
+}
+
+export function normalizeReasoningDialect(value: unknown): ReasoningDialect {
+  const dialect = String(value || "").trim().toLowerCase();
+  return ["openai", "thinking", "enable_thinking"].includes(dialect) ? dialect as ReasoningDialect : "auto";
+}
+
+export function normalizeToolReasoningMode(value: unknown): ToolReasoningMode {
+  const mode = String(value || "").trim().toLowerCase();
+  if (mode === "on" || mode === "off") return mode;
+  return "inherit";
+}
+
+/**
+ * Guesses which reasoning switch an OpenAI-compatible endpoint understands.
+ * Only providers with a documented `thinking` style switch are detected here;
+ * everything else falls back to the OpenAI `reasoning_effort` convention.
+ */
+export function detectReasoningDialect(endpoint: unknown, model: unknown): Exclude<ReasoningDialect, "auto"> {
+  const target = `${String(endpoint || "")} ${String(model || "")}`.toLowerCase();
+  if (/deepseek|bigmodel|zhipu|glm|longcat/.test(target)) return "thinking";
+  if (/dashscope|aliyun|siliconflow|modelscope|qwen|qwq|hunyuan|stepfun/.test(target)) return "enable_thinking";
+  return "openai";
+}
+
+export function resolveReasoningDialect(
+  dialect: ReasoningDialect,
+  endpoint: unknown,
+  model: unknown
+): Exclude<ReasoningDialect, "auto"> {
+  return dialect === "auto" ? detectReasoningDialect(endpoint, model) : dialect;
+}
+
+/**
+ * Builds the reasoning-related request body fields.
+ *
+ * - `undefined` / `null` returns `{}` so callers that do not opt in keep the
+ *   original request body byte-for-byte identical.
+ * - Known thinking dialects receive an explicit disable flag when reasoning is
+ *   off, because some providers (DeepSeek, Qwen3) enable thinking by default.
+ * - Unknown providers never receive disable flags, to avoid 400 responses from
+ *   strict OpenAI-compatible implementations.
+ */
+export function buildReasoningParams(
+  reasoning: ReasoningSettings | null | undefined,
+  endpoint: unknown,
+  model: unknown
+): Record<string, unknown> {
+  if (!reasoning) return {};
+  const config = normalizeReasoningSettings(reasoning);
+  const dialect = resolveReasoningDialect(config.dialect, endpoint, model);
+  const params: Record<string, unknown> = {};
+  if (dialect === "thinking") {
+    params.thinking = { type: config.enabled ? "enabled" : "disabled" };
+  } else if (dialect === "enable_thinking") {
+    params.enable_thinking = config.enabled;
+  }
+  if (config.enabled && config.effort !== "auto" && dialect !== "enable_thinking") {
+    params.reasoning_effort = config.effort;
+  }
+  return params;
+}
+
+export function resolveTranslationReasoning(settings: ExtensionSettings): ReasoningSettings {
+  const base = normalizeReasoningSettings(settings.reasoning);
+  return { ...base, enabled: Boolean(base.enabled && base.applyToTranslation) };
+}
+
+export function resolveToolReasoning(settings: ExtensionSettings, tool: SelectionTool | null | undefined): ReasoningSettings {
+  const base = normalizeReasoningSettings(settings.reasoning);
+  const mode = normalizeToolReasoningMode(tool?.reasoningMode);
+  if (mode === "on") return { ...base, enabled: true };
+  if (mode === "off") return { ...base, enabled: false };
+  return base;
 }
 
 export function resolveToolModelSettings(settings: ExtensionSettings, tool: SelectionTool): ModelSettings {
@@ -148,16 +248,29 @@ export function normalizeInputItem(item: unknown, index: number) {
 }
 
 export function cacheKey(text: string, settings: ExtensionSettings): string {
-  return hashString([
+  const parts = [
     settings.baseUrl,
     settings.model,
     settings.sourceLanguage,
     settings.targetLanguage,
     settings.glossary,
     settings.translationSystemPrompt,
-    settings.translationUserPrompt,
-    text
-  ].join("\n"));
+    settings.translationUserPrompt
+  ];
+  const signature = reasoningCacheSignature(settings);
+  if (signature) parts.push(signature);
+  parts.push(text);
+  return hashString(parts.join("\n"));
+}
+
+/**
+ * Returns an empty string when reasoning cannot change page translation output,
+ * so existing caches stay valid after upgrading to the reasoning settings.
+ */
+function reasoningCacheSignature(settings: ExtensionSettings): string {
+  const reasoning = normalizeReasoningSettings(settings.reasoning);
+  if (!reasoning.enabled || !reasoning.applyToTranslation) return "";
+  return `reasoning:${reasoning.dialect}:${reasoning.effort}`;
 }
 
 export function sourceLanguagePrompt(sourceLanguage: unknown): string {

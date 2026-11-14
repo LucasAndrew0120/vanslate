@@ -145,7 +145,8 @@
     "Keep the output natural for a bilingual web reading experience.",
     "Keep compact number+unit or number+currency tokens unchanged, such as 2MB, 3RMB, 15GB, 20ms, and 10USD.",
     "Keep standalone numbers, versions, dates, times, URLs, emails, file paths, commands, keyboard shortcuts, hashes, IDs, selectors, and dimensions unchanged.",
-    'If an item contains simple inline HTML tags such as <strong>, <em>, <b>, <i>, <code>, <mark>, <sub>, <sup>, or <span style="color:red">, preserve the same tags and safe inline styles around the corresponding translated text.',
+    'If an item contains simple inline HTML tags such as <strong>, <em>, <b>, <i>, <code>, <mark>, <sub>, <sup>, <a href="https://example.com">link</a>, or <span style="color:red">, preserve the same tags and safe inline styles around the corresponding translated text.',
+    "For links, keep the exact href attribute value unchanged so the translated link still points to the same target.",
     "If an item mixes the target language with other languages, keep the parts already in the target language unchanged and translate only the non-target-language parts.",
     "If a short technical token, product name, URL, API name, model name, variable, or code-like fragment is already suitable in the target-language context, keep it unchanged.",
     "{glossaryBlock}",
@@ -193,6 +194,19 @@
   };
 
   // src/core/utils.ts
+  function normalizeReasoningEffort(value) {
+    const effort = String(value || "").trim().toLowerCase();
+    return ["minimal", "low", "medium", "high"].includes(effort) ? effort : "auto";
+  }
+  function normalizeReasoningDialect(value) {
+    const dialect = String(value || "").trim().toLowerCase();
+    return ["openai", "thinking", "enable_thinking"].includes(dialect) ? dialect : "auto";
+  }
+  function normalizeToolReasoningMode(value) {
+    const mode = String(value || "").trim().toLowerCase();
+    if (mode === "on" || mode === "off") return mode;
+    return "inherit";
+  }
   function normalizeTranslationSkipRules(value) {
     const source = value && typeof value === "object" ? value : {};
     const patterns = Array.isArray(source.patterns) ? source.patterns : DEFAULT_SKIP_RULES.patterns;
@@ -313,6 +327,12 @@
     autoTranslateRules: "",
     glossary: "",
     retryCount: 2,
+    reasoning: {
+      enabled: false,
+      effort: "auto",
+      dialect: "auto",
+      applyToTranslation: false
+    },
     enableFloatingBall: true,
     floatingBallMode: "always",
     floatingBallPosition: {
@@ -368,6 +388,10 @@
     autoTranslateRules: document.querySelector("#autoTranslateRules"),
     glossary: document.querySelector("#glossary"),
     retryCount: document.querySelector("#retryCount"),
+    reasoningEnabled: document.querySelector("#reasoningEnabled"),
+    reasoningEffort: document.querySelector("#reasoningEffort"),
+    reasoningDialect: document.querySelector("#reasoningDialect"),
+    reasoningApplyToTranslation: document.querySelector("#reasoningApplyToTranslation"),
     translationSystemPrompt: document.querySelector("#translationSystemPrompt"),
     translationUserPrompt: document.querySelector("#translationUserPrompt"),
     collectionRules: document.querySelector("#collectionRules"),
@@ -442,6 +466,7 @@
       name: t("customTool"),
       enabled: true,
       modelMode: "inherit",
+      reasoningMode: "inherit",
       baseUrl: "",
       apiKey: "",
       model: "",
@@ -503,6 +528,10 @@
     fields.autoTranslateRules.value = settings.autoTranslateRules || "";
     fields.glossary.value = settings.glossary || "";
     fields.retryCount.value = String(settings.retryCount ?? 2);
+    fields.reasoningEnabled.checked = Boolean(settings.reasoning?.enabled);
+    fields.reasoningEffort.value = normalizeReasoningEffort(settings.reasoning?.effort);
+    fields.reasoningDialect.value = normalizeReasoningDialect(settings.reasoning?.dialect);
+    fields.reasoningApplyToTranslation.checked = Boolean(settings.reasoning?.applyToTranslation);
     fields.translationSystemPrompt.value = defaults.translationSystemPrompt || "";
     fields.translationUserPrompt.value = defaults.translationUserPrompt || "";
     fields.collectionRules.value = stringifyCollectionRules(settings.collectionRules || defaults.collectionRules);
@@ -535,6 +564,12 @@
       autoTranslateRules: fields.autoTranslateRules.value.trim(),
       glossary: fields.glossary.value.trim(),
       retryCount: Math.max(0, Math.min(5, Number(fields.retryCount.value) || 0)),
+      reasoning: {
+        enabled: fields.reasoningEnabled.checked,
+        effort: normalizeReasoningEffort(fields.reasoningEffort.value),
+        dialect: normalizeReasoningDialect(fields.reasoningDialect.value),
+        applyToTranslation: fields.reasoningApplyToTranslation.checked
+      },
       translationSystemPrompt: defaults.translationSystemPrompt || "",
       translationUserPrompt: defaults.translationUserPrompt || "",
       collectionRules: parseCollectionRules(fields.collectionRules.value, defaults.collectionRules),
@@ -621,6 +656,11 @@
         createToolSelect(t("toolModelSource"), tool.modelMode, "modelMode", index, [
           ["inherit", t("inheritGlobal")],
           ["custom", t("customModel")]
+        ]),
+        createToolSelect(t("toolReasoning"), normalizeToolReasoningMode(tool.reasoningMode), "reasoningMode", index, [
+          ["inherit", t("inheritGlobal")],
+          ["on", t("reasoningOn")],
+          ["off", t("reasoningOff")]
         ]),
         createToolInput(t("toolDefaultModel"), tool.activeModel || tool.model, "model", index),
         createToolInput(t("toolApiUrl"), tool.baseUrl, "baseUrl", index, { placeholder: t("leaveBlankInherit") }),
@@ -760,6 +800,7 @@
         name: inputs[0]?.value.trim() || "",
         id: inputs[1]?.value.trim() || `tool_${index + 1}`,
         modelMode: selects[0]?.value === "custom" ? "custom" : "inherit",
+        reasoningMode: normalizeToolReasoningMode(selects[1]?.value),
         model,
         activeModel: model,
         baseUrl: inputs[3]?.value.trim().replace(/\/+$/, "") || "",
@@ -806,6 +847,7 @@
       name: String(tool?.name || `${t("tools")} ${index + 1}`).trim(),
       enabled: tool?.enabled !== false,
       modelMode: tool?.modelMode === "custom" ? "custom" : "inherit",
+      reasoningMode: normalizeToolReasoningMode(tool?.reasoningMode),
       baseUrl: String(tool?.baseUrl || "").trim().replace(/\/+$/, ""),
       apiKey: String(tool?.apiKey || "").trim(),
       model,
@@ -870,7 +912,13 @@
       sourceLanguage: fields.sourceLanguage.value.trim() || "auto",
       targetLanguage: fields.targetLanguage.value.trim(),
       glossary: fields.glossary.value.trim(),
-      retryCount: Math.max(0, Math.min(5, Number(fields.retryCount.value) || 0))
+      retryCount: Math.max(0, Math.min(5, Number(fields.retryCount.value) || 0)),
+      reasoning: {
+        enabled: fields.reasoningEnabled.checked,
+        effort: normalizeReasoningEffort(fields.reasoningEffort.value),
+        dialect: normalizeReasoningDialect(fields.reasoningDialect.value),
+        applyToTranslation: fields.reasoningApplyToTranslation.checked
+      }
     };
   }
   function stringifyCollectionRules(value) {

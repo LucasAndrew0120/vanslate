@@ -96,7 +96,8 @@
     "Keep the output natural for a bilingual web reading experience.",
     "Keep compact number+unit or number+currency tokens unchanged, such as 2MB, 3RMB, 15GB, 20ms, and 10USD.",
     "Keep standalone numbers, versions, dates, times, URLs, emails, file paths, commands, keyboard shortcuts, hashes, IDs, selectors, and dimensions unchanged.",
-    'If an item contains simple inline HTML tags such as <strong>, <em>, <b>, <i>, <code>, <mark>, <sub>, <sup>, or <span style="color:red">, preserve the same tags and safe inline styles around the corresponding translated text.',
+    'If an item contains simple inline HTML tags such as <strong>, <em>, <b>, <i>, <code>, <mark>, <sub>, <sup>, <a href="https://example.com">link</a>, or <span style="color:red">, preserve the same tags and safe inline styles around the corresponding translated text.',
+    "For links, keep the exact href attribute value unchanged so the translated link still points to the same target.",
     "If an item mixes the target language with other languages, keep the parts already in the target language unchanged and translate only the non-target-language parts.",
     "If a short technical token, product name, URL, API name, model name, variable, or code-like fragment is already suitable in the target-language context, keep it unchanged.",
     "{glossaryBlock}",
@@ -333,7 +334,11 @@
         node = walker.nextNode();
       }
     }
-    candidates.sort((a, b) => getElementDepth(b) - getElementDepth(a));
+    candidates.sort((a, b) => {
+      const priority = candidatePriority(a) - candidatePriority(b);
+      if (priority !== 0) return priority;
+      return getElementDepth(b) - getElementDepth(a);
+    });
     const blocks = [];
     for (let index = 0; index < candidates.length; index += 1) {
       const element = candidates[index];
@@ -398,9 +403,22 @@
       return true;
     }
     if (tag === "A" || tag === "SPAN") {
-      return Boolean(element.closest("nav, aside, [role='navigation'], [aria-label*='content' i], [aria-label*='table' i], [aria-label*='toc' i], [aria-label*='article' i], [class*='toc' i], [class*='table-of-contents' i], [data-testid*='toc' i]"));
+      if (element.closest(INLINE_HOST_SELECTOR)) return false;
+      const container = element.closest("nav, aside, [role='navigation'], [aria-label*='content' i], [aria-label*='table' i], [aria-label*='toc' i], [aria-label*='article' i], [class*='toc' i], [class*='table-of-contents' i], [data-testid*='toc' i]");
+      if (!container || container === document.documentElement || container === document.body) return false;
+      return true;
     }
     return false;
+  }
+  var INLINE_HOST_SELECTOR = "p, li, td, th, h1, h2, h3, h4, h5, h6, blockquote, dd, dt, figcaption, caption, legend, summary";
+  var CONTENT_BLOCK_TAGS = /* @__PURE__ */ new Set(["H1", "H2", "H3", "H4", "H5", "H6", "P", "LI", "BLOCKQUOTE", "DD", "DT", "FIGCAPTION"]);
+  var CELL_BLOCK_TAGS = /* @__PURE__ */ new Set(["TD", "TH", "CAPTION", "LEGEND", "LABEL", "SUMMARY"]);
+  function candidatePriority(element) {
+    const chrome2 = Boolean(element.closest("nav, aside, header, footer, [role='navigation'], [role='banner'], [role='contentinfo']"));
+    if (chrome2) return 2;
+    if (CONTENT_BLOCK_TAGS.has(element.tagName)) return 0;
+    if (CELL_BLOCK_TAGS.has(element.tagName)) return 1;
+    return 2;
   }
   function isSupplementalTextBlock(element) {
     if (isLikelyMetadataText(element)) return false;
@@ -515,7 +533,7 @@
     }
     const translationNode = document.createElement("span");
     translationNode.className = TRANSLATION_CLASS;
-    setTranslationContent(translationNode, text);
+    setTranslationContent(translationNode, text, element);
     applyTranslationStyle(translationNode, settings);
     appendInlineResult(element, translationNode);
   }
@@ -526,7 +544,7 @@
     clone.removeAttribute(ID_ATTR);
     clone.setAttribute(CLONE_ATTR, "true");
     clone.classList.add(TRANSLATION_CLASS, "is-block-clone");
-    setTranslationContent(clone, text);
+    setTranslationContent(clone, text, element);
     applyTranslationStyle(clone, settings);
     element.insertAdjacentElement("afterend", clone);
   }
@@ -1264,13 +1282,28 @@ Total: ${usage.total_tokens || 0}`;
     }
     return content;
   }
-  function setTranslationContent(node, text) {
+  function setTranslationContent(node, text, sourceElement = null) {
     const content = String(text || "").trim();
     if (!containsSafeInlineTag(content)) {
       node.textContent = content;
       return;
     }
     node.replaceChildren(...sanitizeInlineTranslationNodes(content));
+    if (sourceElement) restoreLinkTargets(node, sourceElement);
+  }
+  function restoreLinkTargets(resultNode, sourceElement) {
+    const candidates = [];
+    if (sourceElement.tagName === "A" && sourceElement.getAttribute("href")) candidates.push(sourceElement);
+    candidates.push(...sourceElement.querySelectorAll("a[href]"));
+    const sourceLinks = candidates.filter((link) => !link.closest(`.${TRANSLATION_CLASS}`)).map((link) => link.getAttribute("href") || "").filter(Boolean);
+    if (!sourceLinks.length) return;
+    Array.from(resultNode.querySelectorAll("a")).forEach((link, index) => {
+      if (link.getAttribute("href")) return;
+      const href = sourceLinks[index] || sourceLinks[0];
+      if (!href || !/^(https?:|mailto:|#|\/)/i.test(href)) return;
+      link.setAttribute("href", href);
+      link.setAttribute("rel", "noreferrer noopener");
+    });
   }
   function containsSafeInlineTag(text) {
     return /<\/?(strong|b|em|i|code|kbd|samp|var|s|u|mark|small|sub|sup|br|a|span)\b/i.test(String(text || ""));
@@ -1543,7 +1576,9 @@ Total: ${usage.total_tokens || 0}`;
   }
   function isUsefulText(text, element) {
     const inArticleNav = Boolean(element?.closest("nav, aside, [role='navigation']"));
-    if (text.length < (inArticleNav ? 2 : 8)) return false;
+    const inTableCell = Boolean(element?.closest("td, th"));
+    const relaxed = inArticleNav || inTableCell;
+    if (text.length < (relaxed ? 2 : 8)) return false;
     if (text.length > (inArticleNav ? 260 : 1800)) return false;
     if (!/[A-Za-z\u4e00-\u9fff]/.test(text)) return false;
     return true;

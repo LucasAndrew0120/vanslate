@@ -33,6 +33,7 @@ test("Vanslate content workflow", async ({ page }) => {
   expect(response?.ok).toBeTruthy();
   await expect(page.locator("#title")).toContainText("快速上下文很重要");
   await expect(page.locator("#nav-link")).toContainText("业务、企业与教育");
+  await expect(page.locator("#nav-link .vanslate-result a")).toHaveAttribute("href", "#title");
   await expect(page.locator("#copy .vanslate-result strong")).toContainText("试试 Slimjet");
   await expect(page.locator("#risk .vanslate-result span")).toHaveCSS("color", "rgb(255, 0, 0)");
   await expect(page.locator("#comment-label")).toContainText("评论字段");
@@ -190,7 +191,7 @@ function runtimeFixtureScript() {
       };
       function translateText(text) {
         if (text.includes("Fast context")) return "快速上下文很重要";
-        if (text.includes("Business")) return "业务、企业与教育";
+        if (text.includes("Business")) return "<a>业务、企业与教育</a>";
         if (text.includes("Vanslate keeps")) return "薇译保持原网页可读，同时添加有用的 AI 输出。<strong>试试 Slimjet，你一定不会后悔！</strong>";
         if (text.includes("becoming vulnerable")) return "如果仍要坚持使用，请注意<span style=\\"color:red\\">存在安全风险</span>，并仔细检查归档版本。";
         if (text.includes("Selection tools")) return "划词工具应保持紧凑可靠。";

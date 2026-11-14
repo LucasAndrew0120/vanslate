@@ -2,15 +2,22 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_SETTINGS, DEFAULT_TRANSLATION_SYSTEM_PROMPT, DEFAULT_TRANSLATION_USER_PROMPT } from "../src/core/defaults";
 import { TranslationService } from "../src/core/translation-service";
-import { OpenAICompatibleChatClient, type ChatClient } from "../src/core/chat-client";
+import { buildChatRequestBody, OpenAICompatibleChatClient, type ChatClient } from "../src/core/chat-client";
 import { readStorageValues, storageKey, writeStorageValues } from "../src/core/storage-keys";
 import type { ExtensionSettings, ProgressSink, SettingsRepository, TranslationCacheMap, TranslationCacheStore } from "../src/core/types";
 import {
+  buildReasoningParams,
+  cacheKey,
+  detectReasoningDialect,
+  normalizeReasoningSettings,
   normalizeSelectionTools,
+  normalizeToolReasoningMode,
   normalizeTranslationSkipRules,
   parseGlossary,
   parseTranslations,
   renderTemplate,
+  resolveToolReasoning,
+  resolveTranslationReasoning,
   shouldSkipTranslation
 } from "../src/core/utils";
 
@@ -284,6 +291,221 @@ test("TranslationService batches misses and writes cache incrementally", async (
   assert.deepEqual(cacheWrites.sort((a, b) => b - a), [4, 1]);
   assert.equal(result.translatedCount, 5);
   assert.equal(Object.keys(cache).length, 5);
+});
+
+test("chat request body keeps the legacy shape when reasoning is not configured", () => {
+  const body = buildChatRequestBody({
+    endpoint: "https://api.deepseek.com/chat/completions",
+    apiKey: "test-key",
+    model: "deepseek-chat",
+    temperature: 0.2,
+    retryCount: 0,
+    messages: [{ role: "user", content: "Hello" }]
+  });
+  assert.deepEqual(Object.keys(body).sort(), ["messages", "model", "temperature"]);
+});
+
+test("reasoning dialect detection covers common providers", () => {
+  assert.equal(detectReasoningDialect("https://api.deepseek.com/chat/completions", "deepseek-chat"), "thinking");
+  assert.equal(detectReasoningDialect("https://open.bigmodel.cn/api/paas/v4/chat/completions", "glm-4.6"), "thinking");
+  assert.equal(detectReasoningDialect("https://api.longcat.chat/openai/v1/chat/completions", "LongCat-2.5"), "thinking");
+  assert.equal(detectReasoningDialect("https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "qwen3-max"), "enable_thinking");
+  assert.equal(detectReasoningDialect("https://api.siliconflow.cn/v1/chat/completions", "qwen3-8b"), "enable_thinking");
+  assert.equal(detectReasoningDialect("https://api.openai.com/v1/chat/completions", "gpt-5"), "openai");
+  assert.equal(detectReasoningDialect("https://api.example.com/v1/chat/completions", "my-model"), "openai");
+});
+
+test("reasoning params enable and disable known thinking dialects", () => {
+  const deepseek = "https://api.deepseek.com/chat/completions";
+  assert.deepEqual(
+    buildReasoningParams({ enabled: false, effort: "auto", dialect: "auto", applyToTranslation: false }, deepseek, "deepseek-chat"),
+    { thinking: { type: "disabled" } }
+  );
+  assert.deepEqual(
+    buildReasoningParams({ enabled: true, effort: "auto", dialect: "auto", applyToTranslation: false }, deepseek, "deepseek-chat"),
+    { thinking: { type: "enabled" } }
+  );
+  assert.deepEqual(
+    buildReasoningParams({ enabled: true, effort: "high", dialect: "auto", applyToTranslation: false }, deepseek, "deepseek-chat"),
+    { thinking: { type: "enabled" }, reasoning_effort: "high" }
+  );
+  assert.deepEqual(
+    buildReasoningParams({ enabled: true, effort: "auto", dialect: "auto", applyToTranslation: false }, "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions", "qwen3-max"),
+    { enable_thinking: true }
+  );
+  assert.deepEqual(
+    buildReasoningParams({ enabled: false, effort: "auto", dialect: "auto", applyToTranslation: false }, "https://api.openai.com/v1/chat/completions", "gpt-5"),
+    {}
+  );
+  assert.deepEqual(
+    buildReasoningParams({ enabled: true, effort: "low", dialect: "auto", applyToTranslation: false }, "https://api.openai.com/v1/chat/completions", "gpt-5"),
+    { reasoning_effort: "low" }
+  );
+  assert.deepEqual(
+    buildReasoningParams({ enabled: true, effort: "high", dialect: "openai", applyToTranslation: false }, deepseek, "deepseek-chat"),
+    { reasoning_effort: "high" }
+  );
+});
+
+test("reasoning settings normalize unknown values and tool overrides", () => {
+  assert.deepEqual(normalizeReasoningSettings(null), {
+    enabled: false,
+    effort: "auto",
+    dialect: "auto",
+    applyToTranslation: false
+  });
+  assert.deepEqual(normalizeReasoningSettings({ enabled: "yes", effort: "extreme", dialect: "weird", applyToTranslation: 1 }), {
+    enabled: false,
+    effort: "auto",
+    dialect: "auto",
+    applyToTranslation: false
+  });
+  assert.equal(normalizeToolReasoningMode("ON"), "on");
+  assert.equal(normalizeToolReasoningMode("off"), "off");
+  assert.equal(normalizeToolReasoningMode(undefined), "inherit");
+
+  const settingsValue = settings({
+    reasoning: { enabled: true, effort: "high", dialect: "auto", applyToTranslation: false }
+  });
+  assert.equal(resolveTranslationReasoning(settingsValue).enabled, false);
+  assert.equal(resolveToolReasoning(settingsValue, null).enabled, true);
+  assert.equal(resolveToolReasoning(settingsValue, { ...normalizeSelectionTools([{ id: "t", name: "T", userPrompt: "{text}", reasoningMode: "off" }])[0] }).enabled, false);
+
+  const translationEnabled = settings({
+    reasoning: { enabled: true, effort: "high", dialect: "auto", applyToTranslation: true }
+  });
+  assert.equal(resolveTranslationReasoning(translationEnabled).enabled, true);
+  assert.notEqual(cacheKey("Hello", settingsValue), cacheKey("Hello", translationEnabled));
+});
+
+test("OpenAICompatibleChatClient sends reasoning fields only when configured", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const fetchImpl = (async (_input: unknown, init: RequestInit) => {
+    bodies.push(JSON.parse(String(init.body)));
+    return jsonResponse(200, { choices: [{ message: { content: "ok" } }] });
+  }) as typeof fetch;
+  const client = new OpenAICompatibleChatClient(fetchImpl, async () => {}, 5);
+  const baseRequest = {
+    endpoint: "https://api.deepseek.com/chat/completions",
+    apiKey: "test-key",
+    model: "deepseek-chat",
+    temperature: 0.2,
+    retryCount: 0,
+    messages: [{ role: "user" as const, content: "Hello" }]
+  };
+
+  await client.complete({
+    ...baseRequest,
+    reasoning: { enabled: false, effort: "auto", dialect: "auto", applyToTranslation: false }
+  });
+  assert.deepEqual(bodies[0].thinking, { type: "disabled" });
+  assert.equal(bodies[0].reasoning_effort, undefined);
+
+  await client.complete({
+    ...baseRequest,
+    reasoning: { enabled: true, effort: "high", dialect: "auto", applyToTranslation: false }
+  });
+  assert.deepEqual(bodies[1].thinking, { type: "enabled" });
+  assert.equal(bodies[1].reasoning_effort, "high");
+
+  await client.complete(baseRequest);
+  assert.deepEqual(Object.keys(bodies[2]).sort(), ["messages", "model", "temperature"]);
+});
+
+test("OpenAICompatibleChatClient retries without reasoning fields when a gateway rejects them", async () => {
+  const bodies: Array<Record<string, unknown>> = [];
+  const fetchImpl = (async (_input: unknown, init: RequestInit) => {
+    const body = JSON.parse(String(init.body));
+    bodies.push(body);
+    if (bodies.length === 1) {
+      return jsonResponse(400, { error: { message: "Unsupported parameter: enable_thinking" } });
+    }
+    return jsonResponse(200, { choices: [{ message: { content: "ok" } }] });
+  }) as typeof fetch;
+  const client = new OpenAICompatibleChatClient(fetchImpl, async () => {}, 5);
+
+  const result = await client.complete({
+    endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions",
+    apiKey: "test-key",
+    model: "qwen-plus",
+    temperature: 0.2,
+    retryCount: 0,
+    reasoning: { enabled: false, effort: "auto", dialect: "auto", applyToTranslation: false },
+    messages: [{ role: "user", content: "Hello" }]
+  });
+
+  assert.equal(result.content, "ok");
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[0].enable_thinking, false);
+  assert.equal(bodies[1].enable_thinking, undefined);
+});
+
+test("TranslationService sends reasoning params to tools but not to page translation by default", async () => {
+  const seen: Array<Record<string, unknown> | null | undefined> = [];
+  const chat: ChatClient = {
+    async complete(request) {
+      seen.push(request.reasoning);
+      return {
+        message: { content: "ok" },
+        content: "ok",
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        raw: {}
+      };
+    }
+  };
+  const repository: SettingsRepository = {
+    async getSettings() {
+      return settings({
+        targetLanguage: "中文",
+        reasoning: { enabled: true, effort: "medium", dialect: "auto", applyToTranslation: false }
+      });
+    }
+  };
+  const sink: ProgressSink = { postItemResult() {}, postProgress() {} };
+  const cacheStore: TranslationCacheStore = {
+    async getMany() { return {}; },
+    async setMany() {}
+  };
+  const service = new TranslationService(repository, cacheStore, chat, sink);
+
+  await service.translateTexts(["Hello world"], { progressId: "p", mode: "page" });
+  assert.equal(seen[0]?.enabled, false);
+  assert.equal(seen[0]?.effort, "medium");
+
+  await service.runSelectionTool("translate", "Hello world");
+  assert.equal(seen[1]?.enabled, true);
+});
+
+test("TranslationService splits a batch when the model returns a wrong translation count", async () => {
+  const calls: number[] = [];
+  const chat: ChatClient = {
+    async complete(request) {
+      const content = request.messages[1].content;
+      const jsonStart = content.lastIndexOf("{\"texts\":");
+      const texts = JSON.parse(content.slice(jsonStart)).texts as string[];
+      calls.push(texts.length);
+      const translations = texts.length > 1 ? texts.slice(0, -1).map((text) => `${text}-译`) : texts.map((text) => `${text}-译`);
+      return {
+        message: { content: JSON.stringify({ translations }) },
+        content: JSON.stringify({ translations }),
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        raw: {}
+      };
+    }
+  };
+  const repository: SettingsRepository = { async getSettings() { return settings({ targetLanguage: "中文", enableCache: false }); } };
+  const cacheStore: TranslationCacheStore = { async getMany() { return {}; }, async setMany() {} };
+  const sink: ProgressSink = { postItemResult() {}, postProgress() {} };
+  const service = new TranslationService(repository, cacheStore, chat, sink);
+
+  const result = await service.translateTexts([
+    { id: "a", text: "First release note." },
+    { id: "b", text: "Second release note." }
+  ], { progressId: "split", mode: "page" });
+
+  assert.deepEqual(calls, [2, 1, 1]);
+  assert.deepEqual(result.translations, ["First release note.-译", "Second release note.-译"]);
+  assert.equal(result.translatedCount, 2);
 });
 
 function settings(overrides: Partial<ExtensionSettings> = {}): ExtensionSettings {

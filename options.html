@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>薇译 Vanslate 设置</title>
+    <title>薇译 Vanslate（二开版）设置</title>
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
@@ -50,6 +50,41 @@ deepseek-chat"></textarea>
               <span class="fieldLabel" data-i18n="defaultModel">◇ 通用默认模型</span>
               <input id="model" type="text" placeholder="gpt-4o-mini" required>
             </label>
+
+            <label class="fieldRow checkbox">
+              <span class="fieldLabel" data-i18n="reasoningEnabled">🧠 启用模型思考（推理）</span>
+              <input id="reasoningEnabled" type="checkbox">
+            </label>
+
+            <label class="fieldRow">
+              <span class="fieldLabel" data-i18n="reasoningEffort">思考强度</span>
+              <select id="reasoningEffort">
+                <option value="auto" data-i18n="reasoningEffortAuto">自动（不指定）</option>
+                <option value="minimal" data-i18n="reasoningEffortMinimal">最低</option>
+                <option value="low" data-i18n="reasoningEffortLow">低</option>
+                <option value="medium" data-i18n="reasoningEffortMedium">中</option>
+                <option value="high" data-i18n="reasoningEffortHigh">高</option>
+              </select>
+            </label>
+
+            <label class="fieldRow">
+              <span class="fieldLabel" data-i18n="reasoningDialect">接口方言</span>
+              <select id="reasoningDialect">
+                <option value="auto" data-i18n="reasoningDialectAuto">自动识别</option>
+                <option value="openai" data-i18n="reasoningDialectOpenai">OpenAI（reasoning_effort）</option>
+                <option value="thinking" data-i18n="reasoningDialectThinking">thinking.type（DeepSeek / GLM 等）</option>
+                <option value="enable_thinking" data-i18n="reasoningDialectEnable">enable_thinking（Qwen / DashScope 等）</option>
+              </select>
+            </label>
+
+            <label class="fieldRow checkbox">
+              <span class="fieldLabel" data-i18n="reasoningTranslation">全文翻译也使用思考</span>
+              <input id="reasoningApplyToTranslation" type="checkbox">
+            </label>
+
+            <div class="fieldRow tall full">
+              <p class="fieldHint" data-i18n="reasoningHint">默认关闭。关闭时会对 DeepSeek、GLM、Qwen 等默认开启思考的接口主动发送关闭参数；OpenAI 等未知接口不发送任何额外字段。强度为“自动”时只使用方言开关，不写 reasoning_effort。全文翻译建议保持关闭，思考会更慢也更贵。</p>
+            </div>
 
             <label class="fieldRow">
               <span class="fieldLabel" data-i18n="sourceLanguage">🌐 源语言</span>

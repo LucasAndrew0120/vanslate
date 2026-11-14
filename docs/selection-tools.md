@@ -26,6 +26,7 @@
 - `systemPrompt`：系统提示词。
 - `userPrompt`：用户提示词模板。
 - `modelMode`：`inherit` 或 `custom`。
+- `reasoningMode`：`inherit`（跟随通用思考开关）、`on`（强制开启）、`off`（强制关闭）。
 - `baseUrl`、`apiKey`、`models`、`activeModel`：单工具模型覆盖。
 
 如果工具不设置模型信息，则继承通用模型设置。
@@ -53,6 +54,7 @@
 设置页工具卡片提供调试区：
 
 - 展示最终 system/user messages。
+- 展示最终请求体，包括实际附加的思考参数。
 - 展示模型输出。
 - 如果接口返回 reasoning，则展示 reasoning。
 - 如果接口返回 usage，则展示 token 用量。

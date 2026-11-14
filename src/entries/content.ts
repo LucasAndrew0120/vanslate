@@ -257,7 +257,11 @@ async function collectTextBlocks(roots = [document.body || document.documentElem
     }
   }
 
-  candidates.sort((a, b) => getElementDepth(b) - getElementDepth(a));
+  candidates.sort((a, b) => {
+    const priority = candidatePriority(a) - candidatePriority(b);
+    if (priority !== 0) return priority;
+    return getElementDepth(b) - getElementDepth(a);
+  });
   const blocks = [];
 
   for (let index = 0; index < candidates.length; index += 1) {
@@ -333,9 +337,35 @@ function isPotentialTextBlock(element) {
     return true;
   }
   if (tag === "A" || tag === "SPAN") {
-    return Boolean(element.closest("nav, aside, [role='navigation'], [aria-label*='content' i], [aria-label*='table' i], [aria-label*='toc' i], [aria-label*='article' i], [class*='toc' i], [class*='table-of-contents' i], [data-testid*='toc' i]"));
+    // A link or span inside a paragraph/list item/table cell is part of that
+    // block: translating it separately splits sentences and leaves the block
+    // itself in the source language, so let the block own the translation.
+    if (element.closest(INLINE_HOST_SELECTOR)) return false;
+    const container = element.closest("nav, aside, [role='navigation'], [aria-label*='content' i], [aria-label*='table' i], [aria-label*='toc' i], [aria-label*='article' i], [class*='toc' i], [class*='table-of-contents' i], [data-testid*='toc' i]");
+    // Site-wide classes such as "vector-feature-toc-..." on <html> would make
+    // every link on the page look like navigation text.
+    if (!container || container === document.documentElement || container === document.body) return false;
+    return true;
   }
   return false;
+}
+
+const INLINE_HOST_SELECTOR = "p, li, td, th, h1, h2, h3, h4, h5, h6, blockquote, dd, dt, figcaption, caption, legend, summary";
+
+const CONTENT_BLOCK_TAGS = new Set(["H1", "H2", "H3", "H4", "H5", "H6", "P", "LI", "BLOCKQUOTE", "DD", "DT", "FIGCAPTION"]);
+const CELL_BLOCK_TAGS = new Set(["TD", "TH", "CAPTION", "LEGEND", "LABEL", "SUMMARY"]);
+
+/**
+ * Decides which candidate is translated first when a page exceeds the per-pass
+ * block budget. Article text wins over table cells, then page chrome (nav,
+ * aside, header, footer), so a site with a huge menu does not starve the body.
+ */
+function candidatePriority(element) {
+  const chrome = Boolean(element.closest("nav, aside, header, footer, [role='navigation'], [role='banner'], [role='contentinfo']"));
+  if (chrome) return 2;
+  if (CONTENT_BLOCK_TAGS.has(element.tagName)) return 0;
+  if (CELL_BLOCK_TAGS.has(element.tagName)) return 1;
+  return 2;
 }
 
 function isSupplementalTextBlock(element) {
@@ -472,7 +502,7 @@ function renderTranslation(element, text, settings) {
 
   const translationNode = document.createElement("span");
   translationNode.className = TRANSLATION_CLASS;
-  setTranslationContent(translationNode, text);
+  setTranslationContent(translationNode, text, element);
   applyTranslationStyle(translationNode, settings);
   appendInlineResult(element, translationNode);
 }
@@ -484,7 +514,7 @@ function appendBlockClone(element, text, settings) {
   clone.removeAttribute(ID_ATTR);
   clone.setAttribute(CLONE_ATTR, "true");
   clone.classList.add(TRANSLATION_CLASS, "is-block-clone");
-  setTranslationContent(clone, text);
+  setTranslationContent(clone, text, element);
   applyTranslationStyle(clone, settings);
   element.insertAdjacentElement("afterend", clone);
 }
@@ -1353,13 +1383,37 @@ function serializeInlineNode(node) {
   return content;
 }
 
-function setTranslationContent(node, text) {
+function setTranslationContent(node, text, sourceElement = null) {
   const content = String(text || "").trim();
   if (!containsSafeInlineTag(content)) {
     node.textContent = content;
     return;
   }
   node.replaceChildren(...sanitizeInlineTranslationNodes(content));
+  if (sourceElement) restoreLinkTargets(node, sourceElement);
+}
+
+/**
+ * Models often translate <a>text</a> but drop the href attribute. Copy the
+ * target from the matching source link by position so translated links keep
+ * working instead of turning into dead text.
+ */
+function restoreLinkTargets(resultNode, sourceElement) {
+  const candidates = [];
+  if (sourceElement.tagName === "A" && sourceElement.getAttribute("href")) candidates.push(sourceElement);
+  candidates.push(...sourceElement.querySelectorAll("a[href]"));
+  const sourceLinks = candidates
+    .filter((link) => !link.closest(`.${TRANSLATION_CLASS}`))
+    .map((link) => link.getAttribute("href") || "")
+    .filter(Boolean);
+  if (!sourceLinks.length) return;
+  Array.from(resultNode.querySelectorAll("a")).forEach((link, index) => {
+    if (link.getAttribute("href")) return;
+    const href = sourceLinks[index] || sourceLinks[0];
+    if (!href || !/^(https?:|mailto:|#|\/)/i.test(href)) return;
+    link.setAttribute("href", href);
+    link.setAttribute("rel", "noreferrer noopener");
+  });
 }
 
 function containsSafeInlineTag(text) {
@@ -1689,7 +1743,11 @@ function normalizeText(text) {
 
 function isUsefulText(text, element) {
   const inArticleNav = Boolean(element?.closest("nav, aside, [role='navigation']"));
-  if (text.length < (inArticleNav ? 2 : 8)) return false;
+  // Table cells are content, but their text is often a single short word
+  // ("Feature", "Retry"), so they get the same relaxed minimum as nav text.
+  const inTableCell = Boolean(element?.closest("td, th"));
+  const relaxed = inArticleNav || inTableCell;
+  if (text.length < (relaxed ? 2 : 8)) return false;
   if (text.length > (inArticleNav ? 260 : 1800)) return false;
   if (!/[A-Za-z\u4e00-\u9fff]/.test(text)) return false;
   return true;

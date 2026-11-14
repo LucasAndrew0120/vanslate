@@ -1,11 +1,48 @@
 import type { ChatRequest, ChatResponse } from "./types";
-import { normalizeUsage, readableError } from "./utils";
+import { buildReasoningParams, normalizeUsage, readableError } from "./utils";
 
 export interface ChatClient {
   complete(request: ChatRequest): Promise<ChatResponse>;
 }
 
 export type Sleep = (ms: number) => Promise<void>;
+
+/**
+ * Assembles the Chat Completions request body. Reasoning/thinking fields are
+ * only added when the caller passes an explicit ReasoningSettings object, so
+ * the default request stays compatible with any OpenAI-compatible endpoint.
+ */
+export function buildChatRequestBody(request: ChatRequest): Record<string, unknown> {
+  return {
+    model: request.model,
+    temperature: request.temperature,
+    messages: request.messages,
+    ...buildReasoningParams(request.reasoning, request.endpoint, request.model)
+  };
+}
+
+const REASONING_BODY_KEYS = ["thinking", "enable_thinking", "reasoning_effort"] as const;
+
+/**
+ * Some OpenAI-compatible gateways reject unknown reasoning fields with HTTP 400
+ * instead of ignoring them. When the failure message names one of the fields we
+ * injected, return a body without them so the caller can retry safely.
+ */
+export function stripRejectedReasoningParams(
+  body: Record<string, unknown>,
+  error: unknown
+): Record<string, unknown> | null {
+  const status = Number((error as Record<string, unknown>)?.status) || 0;
+  if (status && status !== 400 && status !== 422) return null;
+  const message = readableError(error).toLowerCase();
+  const rejected = REASONING_BODY_KEYS.filter((key) => key in body && message.includes(key));
+  if (!rejected.length) return null;
+  const fallback = { ...body };
+  rejected.forEach((key) => {
+    delete fallback[key];
+  });
+  return fallback;
+}
 
 export class OpenAICompatibleChatClient implements ChatClient {
   constructor(
@@ -15,18 +52,7 @@ export class OpenAICompatibleChatClient implements ChatClient {
   ) {}
 
   async complete(request: ChatRequest): Promise<ChatResponse> {
-    const payload = await this.fetchJsonWithRetry(request.endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${request.apiKey}`
-      },
-      body: JSON.stringify({
-        model: request.model,
-        temperature: request.temperature,
-        messages: request.messages
-      })
-    }, request.retryCount);
+    const payload = await this.postChat(request);
 
     const message = (payload as any)?.choices?.[0]?.message || {};
     return {
@@ -34,6 +60,32 @@ export class OpenAICompatibleChatClient implements ChatClient {
       content: String(message.content || "").trim(),
       usage: normalizeUsage((payload as any)?.usage),
       raw: payload
+    };
+  }
+
+  private async postChat(request: ChatRequest): Promise<unknown> {
+    const body = buildChatRequestBody(request);
+    try {
+      return await this.fetchJsonWithRetry(request.endpoint, this.requestInit(request, body), request.retryCount);
+    } catch (error) {
+      const fallbackBody = stripRejectedReasoningParams(body, error);
+      if (!fallbackBody) throw error;
+      return this.fetchJsonWithRetry(
+        request.endpoint,
+        this.requestInit(request, fallbackBody),
+        Math.min(request.retryCount, 1)
+      );
+    }
+  }
+
+  private requestInit(request: ChatRequest, body: Record<string, unknown>): RequestInit {
+    return {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${request.apiKey}`
+      },
+      body: JSON.stringify(body)
     };
   }
 

@@ -2,7 +2,7 @@
   "manifest_version": 2,
   "name": "__MSG_extName__",
   "description": "__MSG_extDescription__",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "default_locale": "zh_CN",
   "permissions": [
     "<all_urls>",
@@ -17,7 +17,7 @@
     ]
   },
   "browser_action": {
-    "default_title": "薇译 Vanslate",
+    "default_title": "薇译 Vanslate（二开版）",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/png/vanslate-16.png",
