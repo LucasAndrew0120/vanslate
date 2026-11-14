@@ -237,17 +237,19 @@ export function normalizeInputItem(item: unknown, index: number) {
     return {
       id: String(record.id || `i${index}`),
       text: String(record.text || "").trim(),
+      context: String(record.context || "").trim().slice(0, 200),
       index
     };
   }
   return {
     id: `i${index}`,
     text: String(item || "").trim(),
+    context: "",
     index
   };
 }
 
-export function cacheKey(text: string, settings: ExtensionSettings): string {
+export function cacheKey(text: string, settings: ExtensionSettings, context = ""): string {
   const parts = [
     settings.baseUrl,
     settings.model,
@@ -259,6 +261,7 @@ export function cacheKey(text: string, settings: ExtensionSettings): string {
   ];
   const signature = reasoningCacheSignature(settings);
   if (signature) parts.push(signature);
+  if (context) parts.push(context);
   parts.push(text);
   return hashString(parts.join("\n"));
 }

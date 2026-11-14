@@ -279,18 +279,50 @@ test("TranslationService batches misses and writes cache incrementally", async (
   };
 
   const service = new TranslationService(repository, cacheStore, chat, sink, () => 456);
+  const longText = "Release note content for context aware batching. ".repeat(25).trim();
   const result = await service.translateTexts([
-    { id: "a", text: "First release note." },
-    { id: "b", text: "Second release note." },
-    { id: "c", text: "Third release note." },
-    { id: "d", text: "Fourth release note." },
-    { id: "e", text: "Fifth release note." }
+    { id: "a", text: `${longText} a` },
+    { id: "b", text: `${longText} b` },
+    { id: "c", text: `${longText} c` },
+    { id: "d", text: `${longText} d` },
+    { id: "e", text: `${longText} e` }
   ], { progressId: "batch", mode: "page" });
 
   assert.deepEqual(calls.sort((a, b) => b - a), [4, 1]);
   assert.deepEqual(cacheWrites.sort((a, b) => b - a), [4, 1]);
   assert.equal(result.translatedCount, 5);
   assert.equal(Object.keys(cache).length, 5);
+});
+
+test("TranslationService sends page context and section headings to the model", async () => {
+  let prompt = "";
+  const chat: ChatClient = {
+    async complete(request) {
+      prompt = request.messages[1].content;
+      const jsonStart = prompt.lastIndexOf("{\"texts\":");
+      const texts = JSON.parse(prompt.slice(jsonStart)).texts as string[];
+      return {
+        message: { content: JSON.stringify({ translations: texts.map((text) => `${text}-译`) }) },
+        content: JSON.stringify({ translations: texts.map((text) => `${text}-译`) }),
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        raw: {}
+      };
+    }
+  };
+  const repository: SettingsRepository = { async getSettings() { return settings({ targetLanguage: "中文", enableCache: false }); } };
+  const cacheStore: TranslationCacheStore = { async getMany() { return {}; }, async setMany() {} };
+  const sink: ProgressSink = { postItemResult() {}, postProgress() {} };
+  const service = new TranslationService(repository, cacheStore, chat, sink);
+
+  await service.translateTexts([
+    { id: "a", text: "Vanslate keeps the original layout.", context: "Page translation" },
+    { id: "b", text: "Caching reduces repeated requests.", context: "Caching" }
+  ], { progressId: "ctx", mode: "page", pageTitle: "Vanslate handbook", pageUrl: "https://example.com/docs" });
+
+  assert.match(prompt, /Page title: Vanslate handbook/);
+  assert.match(prompt, /Page URL: https:\/\/example\.com\/docs/);
+  assert.match(prompt, /"contexts":\["Page translation","Caching"\]/);
+  assert.notEqual(cacheKey("Hello", settings(), "Page translation"), cacheKey("Hello", settings(), "Caching"));
 });
 
 test("chat request body keeps the legacy shape when reasoning is not configured", () => {

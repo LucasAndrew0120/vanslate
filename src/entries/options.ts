@@ -26,7 +26,7 @@ const DEFAULT_SETTINGS = {
   enableAutoTranslate: false,
   autoTranslateRules: "",
   glossary: "",
-  retryCount: 2,
+  retryCount: 3,
   reasoning: {
     enabled: false,
     effort: "auto",

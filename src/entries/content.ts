@@ -17,7 +17,8 @@ const ID_ATTR = "data-vanslate-id";
 const CLONE_ATTR = "data-vanslate-clone";
 const SAFE_INLINE_TAGS = new Set(["A", "B", "BR", "CODE", "EM", "I", "KBD", "MARK", "S", "SAMP", "SMALL", "SPAN", "STRONG", "SUB", "SUP", "U", "VAR"]);
 const SAFE_INLINE_STYLE_PROPS = ["color", "background-color", "font-weight", "font-style", "text-decoration"];
-const MAX_BLOCKS_PER_PASS = 80;
+const MAX_BLOCKS_PER_PASS = 2000;
+const MAX_CHARS_PER_PASS = 120000;
 const FLOATING_DRAG_THRESHOLD = 4;
 
 const pendingElements = new Map();
@@ -171,7 +172,9 @@ async function translatePage(options) {
       type: "TRANSLATE_TEXTS",
       texts: items,
       progressId: `page-${Date.now()}`,
-      mode: options.auto ? "auto" : "page"
+      mode: options.auto ? "auto" : "page",
+      pageTitle: document.title,
+      pageUrl: location.href
     });
     if (extensionContextInvalidated) return { translatedCount: 0, queuedCount: 0 };
     if (!response?.ok) {
@@ -228,13 +231,15 @@ async function translateSelection(toolId = "translate", toolName = "") {
 
 async function collectAndMarkTextBlocks(roots = [document.body || document.documentElement]) {
   const blocks = await collectTextBlocks(roots);
+  const resolveContext = createHeadingContextResolver();
   const items = [];
   for (let index = 0; index < blocks.length; index += 1) {
     const element = blocks[index];
     const id = ensureElementId(element);
     const text = getElementSourceText(element);
-    markElementLoading(element, id, text);
-    items.push({ id, text });
+    const context = resolveContext(element);
+    markElementLoading(element, id, text, context);
+    items.push({ id, text, context });
     if (index % 8 === 7) await yieldToPage();
   }
   return items;
@@ -264,27 +269,64 @@ async function collectTextBlocks(roots = [document.body || document.documentElem
     return getElementDepth(b) - getElementDepth(a);
   });
   const blocks = [];
+  let collectedChars = 0;
 
   for (let index = 0; index < candidates.length; index += 1) {
     const element = candidates[index];
     if (blocks.length >= MAX_BLOCKS_PER_PASS) break;
+    if (collectedChars >= MAX_CHARS_PER_PASS) break;
     if (!(element instanceof HTMLElement)) continue;
     if (element.hasAttribute(STATE_ATTR)) continue;
     if (element.hasAttribute(CLONE_ATTR) || element.classList.contains(TRANSLATION_CLASS)) continue;
     if (element.closest(`#${PANEL_ID}, #${PROGRESS_ID}, #${TOOLBAR_ID}`)) continue;
     if (element.closest(`[${CLONE_ATTR}], .${TRANSLATION_CLASS}`)) continue;
     if (isIgnoredCandidate(element)) continue;
-    if (!isVisible(element)) continue;
+    // Off-screen blocks are still translated; only hidden/collapsed nodes are skipped.
+    if (!isRendered(element)) continue;
 
     const text = getElementSourceText(element);
     if (!isUsefulText(text, element)) continue;
     if (overlapsQueuedBlock(element, blocks)) continue;
 
     blocks.push(element);
+    collectedChars += text.length;
     if (index % 24 === 23) await yieldToPage();
   }
 
+  // Batch consecutive blocks after priority selection so requests keep local context.
+  blocks.sort(compareDocumentOrder);
   return blocks;
+}
+
+function compareDocumentOrder(a, b) {
+  if (a === b) return 0;
+  return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+}
+
+/**
+ * Builds a resolver that maps a block to its nearest preceding section heading.
+ * Headings are indexed once per pass and blocks are processed in document order.
+ */
+function createHeadingContextResolver() {
+  const headings = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6"))
+    .filter((node) => !node.closest(`.${TRANSLATION_CLASS}, .${ORIGINAL_CLASS}`));
+  let index = 0;
+  return (element) => {
+    while (index < headings.length && (element.compareDocumentPosition(headings[index]) & Node.DOCUMENT_POSITION_PRECEDING)) {
+      index += 1;
+    }
+    const heading = headings[index - 1];
+    return heading ? normalizeText(heading.textContent).slice(0, 120) : "";
+  };
+}
+
+function isRendered(element) {
+  const style = window.getComputedStyle(element);
+  if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) {
+    return false;
+  }
+  const rect = element.getBoundingClientRect();
+  return rect.width > 0 && rect.height > 0;
 }
 
 function normalizeCollectRoots(roots) {
@@ -436,11 +478,12 @@ function safePattern(value, fallback) {
   }
 }
 
-function markElementLoading(element, id, text = "") {
+function markElementLoading(element, id, text = "", context = "") {
   element.setAttribute(STATE_ATTR, "pending");
   pendingElements.set(id, {
     element,
     text,
+    context,
     settings: { ...currentSettings }
   });
 
@@ -471,6 +514,7 @@ function applyItemResult(item) {
     failedElements.set(item.id, {
       element,
       text: pending?.text || item.text || getElementSourceText(element),
+      context: pending?.context || item.context || "",
       settings: pending?.settings || currentSettings,
       error: readableError(item.error)
     });
@@ -619,12 +663,14 @@ async function retryFailedItem(id) {
   if (!failed?.element || !failed.text) return;
   currentSettings = await loadRenderSettings();
   failed.element.querySelectorAll(".vanslate-error-retry").forEach((node) => node.remove());
-  markElementLoading(failed.element, id, failed.text);
+  markElementLoading(failed.element, id, failed.text, failed.context || "");
   const response = await safeRuntimeSendMessage({
     type: "TRANSLATE_TEXTS",
-    texts: [{ id, text: failed.text }],
+    texts: [{ id, text: failed.text, context: failed.context || "" }],
     progressId: `retry-${Date.now()}`,
-    mode: "retry"
+    mode: "retry",
+    pageTitle: document.title,
+    pageUrl: location.href
   });
   if (extensionContextInvalidated) return;
   if (!response?.ok) {
@@ -767,7 +813,9 @@ async function runVirtualCollect() {
       type: "TRANSLATE_TEXTS",
       texts: items,
       progressId: `virtual-${Date.now()}`,
-      mode: "virtual-scroll"
+      mode: "virtual-scroll",
+      pageTitle: document.title,
+      pageUrl: location.href
     });
     if (extensionContextInvalidated) return;
     if (!response?.ok) markItemsFailed(items, response?.error || "Translation failed.");
@@ -1776,16 +1824,6 @@ function setBusy(isBusy) {
 
 function getSelectionText() {
   return window.getSelection()?.toString() || "";
-}
-
-function isVisible(element) {
-  const style = window.getComputedStyle(element);
-  if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) {
-    return false;
-  }
-
-  const rect = element.getBoundingClientRect();
-  return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight * 1.5;
 }
 
 function normalizeText(text) {

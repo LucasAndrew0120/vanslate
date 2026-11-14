@@ -48,7 +48,7 @@ export class OpenAICompatibleChatClient implements ChatClient {
   constructor(
     private readonly fetchImpl: typeof fetch = globalThis.fetch.bind(globalThis),
     private readonly sleepImpl: Sleep = sleep,
-    private readonly retryBaseDelayMs = 1000
+    private readonly retryBaseDelayMs = 1500
   ) {}
 
   async complete(request: ChatRequest): Promise<ChatResponse> {
@@ -120,8 +120,8 @@ export class OpenAICompatibleChatClient implements ChatClient {
 
   private retryDelay(error: unknown, attempt: number): number {
     const retryAfter = Number((error as Record<string, unknown>)?.retryAfter) || 0;
-    if (retryAfter > 0) return Math.min(retryAfter * 1000, 15000);
-    return Math.min(this.retryBaseDelayMs * 2 ** attempt, 8000);
+    if (retryAfter > 0) return Math.min(retryAfter * 1000, 20000);
+    return Math.min(this.retryBaseDelayMs * 2 ** attempt, 20000);
   }
 }
 

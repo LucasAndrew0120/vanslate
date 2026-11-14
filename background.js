@@ -14,6 +14,7 @@
     'If an item contains simple inline HTML tags such as <strong>, <em>, <b>, <i>, <code>, <mark>, <sub>, <sup>, <a href="https://example.com">link</a>, or <span style="color:red">, preserve the same tags and safe inline styles around the corresponding translated text.',
     "For links, keep the exact href attribute value unchanged so the translated link still points to the same target.",
     "If an item mixes the target language with other languages, keep the parts already in the target language unchanged and translate only the non-target-language parts.",
+    "Use the page title, page URL, and the contexts array as background context for terminology, tone, and pronouns; never translate or output those context fields.",
     "If a short technical token, product name, URL, API name, model name, variable, or code-like fragment is already suitable in the target-language context, keep it unchanged.",
     "{glossaryBlock}",
     'Return only JSON in this exact shape: {"translations":["..."]}.',
@@ -217,7 +218,7 @@
     enableAutoTranslate: false,
     autoTranslateRules: "",
     glossary: "",
-    retryCount: 2,
+    retryCount: 3,
     reasoning: DEFAULT_REASONING_SETTINGS,
     enableFloatingBall: true,
     floatingBallMode: "always",
@@ -528,16 +529,18 @@
       return {
         id: String(record.id || `i${index}`),
         text: String(record.text || "").trim(),
+        context: String(record.context || "").trim().slice(0, 200),
         index
       };
     }
     return {
       id: `i${index}`,
       text: String(item || "").trim(),
+      context: "",
       index
     };
   }
-  function cacheKey(text, settings) {
+  function cacheKey(text, settings, context = "") {
     const parts = [
       settings.baseUrl,
       settings.model,
@@ -549,6 +552,7 @@
     ];
     const signature = reasoningCacheSignature(settings);
     if (signature) parts.push(signature);
+    if (context) parts.push(context);
     parts.push(text);
     return hashString(parts.join("\n"));
   }
@@ -925,7 +929,7 @@
     return fallback;
   }
   var OpenAICompatibleChatClient = class {
-    constructor(fetchImpl = globalThis.fetch.bind(globalThis), sleepImpl = sleep, retryBaseDelayMs = 1e3) {
+    constructor(fetchImpl = globalThis.fetch.bind(globalThis), sleepImpl = sleep, retryBaseDelayMs = 1500) {
       this.fetchImpl = fetchImpl;
       this.sleepImpl = sleepImpl;
       this.retryBaseDelayMs = retryBaseDelayMs;
@@ -992,8 +996,8 @@
     }
     retryDelay(error, attempt) {
       const retryAfter = Number(error?.retryAfter) || 0;
-      if (retryAfter > 0) return Math.min(retryAfter * 1e3, 15e3);
-      return Math.min(this.retryBaseDelayMs * 2 ** attempt, 8e3);
+      if (retryAfter > 0) return Math.min(retryAfter * 1e3, 2e4);
+      return Math.min(this.retryBaseDelayMs * 2 ** attempt, 2e4);
     }
   };
   function sleep(ms) {
@@ -1001,8 +1005,9 @@
   }
 
   // src/core/translation-service.ts
-  var VANSLATE_TRANSLATION_BATCH_SIZE = 4;
-  var VANSLATE_TRANSLATION_CONCURRENCY = 2;
+  var VANSLATE_TRANSLATION_BATCH_CHARS = 5e3;
+  var VANSLATE_TRANSLATION_BATCH_ITEMS = 60;
+  var VANSLATE_TRANSLATION_CONCURRENCY = 1;
   var TranslationService = class {
     constructor(settingsRepository2, cacheStore, chatClient, progressSink, now = () => Date.now()) {
       this.settingsRepository = settingsRepository2;
@@ -1039,7 +1044,7 @@
           });
           continue;
         }
-        const key = cacheKey(item.text, settings);
+        const key = cacheKey(item.text, settings, item.context);
         cacheKeysByIndex.set(item.index, key);
       }
       const cache = settings.enableCache ? await this.cacheStore.getMany(Array.from(cacheKeysByIndex.values())) : {};
@@ -1068,7 +1073,7 @@
         skippedCount,
         stage: misses.length ? "translating" : "done"
       });
-      const batches = chunk(misses, VANSLATE_TRANSLATION_BATCH_SIZE);
+      const batches = chunkTranslationItems(misses);
       let nextBatchIndex = 0;
       const workerCount = Math.min(VANSLATE_TRANSLATION_CONCURRENCY, batches.length);
       await Promise.all(Array.from({ length: workerCount }, async () => {
@@ -1077,7 +1082,7 @@
           nextBatchIndex += 1;
           if (!batch) continue;
           try {
-            const result = await this.translateBatch(batch.map((item) => item.text), settings);
+            const result = await this.translateBatch(batch, settings, context);
             const cacheUpdates = {};
             batch.forEach((item, index) => {
               const translatedText = result.translations[index] || "";
@@ -1228,27 +1233,29 @@
         usage: response.usage
       };
     }
-    async translateSingle(text, settings) {
-      const result = await this.translateBatch([text], settings);
-      return {
-        text: result.translations[0] || "",
-        usage: result.usage
-      };
-    }
-    async translateBatch(texts, settings) {
+    async translateBatch(items, settings, page = {}) {
+      const texts = items.map((item) => item.text);
+      const contexts = items.map((item) => String(item.context || "").trim());
+      const hasContext = contexts.some(Boolean);
       const glossary = parseGlossary(settings.glossary);
       const glossaryText = glossary.length ? `Use this glossary exactly when applicable:
 ${glossary.map((item) => `${item.source} => ${item.target}`).join("\n")}` : "No glossary is provided.";
-      const prompt = renderTemplate(settings.translationUserPrompt || DEFAULT_TRANSLATION_USER_PROMPT, {
+      const pageLines = [
+        page.pageTitle ? `Page title: ${page.pageTitle}` : "",
+        page.pageUrl ? `Page URL: ${page.pageUrl}` : ""
+      ].filter(Boolean).join("\n");
+      const contextRule = hasContext ? "contexts[i] is the nearest section heading for texts[i]. Use it only as background context for terminology, tone, and pronouns; never translate or output it." : "";
+      const template = renderTemplate(settings.translationUserPrompt || DEFAULT_TRANSLATION_USER_PROMPT, {
         text: texts.join("\n\n"),
-        textsJson: JSON.stringify({ texts }),
+        textsJson: JSON.stringify(hasContext ? { texts, contexts } : { texts }),
         sourceLanguage: settings.sourceLanguage,
         sourceLanguagePrompt: sourceLanguagePrompt(settings.sourceLanguage),
         targetLanguage: settings.targetLanguage,
         glossary: settings.glossary,
         glossaryBlock: glossaryText,
-        url: ""
+        url: page.pageUrl || ""
       });
+      const prompt = [pageLines, contextRule, template].filter(Boolean).join("\n");
       const response = await this.chatClient.complete({
         endpoint: joinUrl(settings.baseUrl, "/chat/completions"),
         apiKey: settings.apiKey,
@@ -1269,11 +1276,11 @@ ${glossary.map((item) => `${item.source} => ${item.target}`).join("\n")}` : "No 
       });
       const translations = parseTranslations(response.content);
       if (translations.length !== texts.length) {
-        if (texts.length > 1) {
-          const middle = Math.ceil(texts.length / 2);
+        if (items.length > 1) {
+          const middle = Math.ceil(items.length / 2);
           const [left, right] = await Promise.all([
-            this.translateBatch(texts.slice(0, middle), settings),
-            this.translateBatch(texts.slice(middle), settings)
+            this.translateBatch(items.slice(0, middle), settings, page),
+            this.translateBatch(items.slice(middle), settings, page)
           ]);
           return {
             translations: [...left.translations, ...right.translations],
@@ -1318,11 +1325,22 @@ ${glossary.map((item) => `${item.source} => ${item.target}`).join("\n")}` : "No 
       });
     }
   };
-  function chunk(items, size) {
+  function chunkTranslationItems(items) {
     const output = [];
-    for (let index = 0; index < items.length; index += size) {
-      output.push(items.slice(index, index + size));
+    let current = [];
+    let chars = 0;
+    for (const item of items) {
+      const length = item.text.length;
+      const wouldOverflow = current.length > 0 && (chars + length > VANSLATE_TRANSLATION_BATCH_CHARS || current.length >= VANSLATE_TRANSLATION_BATCH_ITEMS);
+      if (wouldOverflow) {
+        output.push(current);
+        current = [];
+        chars = 0;
+      }
+      current.push(item);
+      chars += length;
     }
+    if (current.length) output.push(current);
     return output;
   }
 
@@ -1359,7 +1377,9 @@ ${glossary.map((item) => `${item.source} => ${item.target}`).join("\n")}` : "No 
       translationService.translateTexts(message.texts || [], {
         tabId: sender.tab?.id || message.tabId,
         progressId: message.progressId || "default",
-        mode: message.mode || "page"
+        mode: message.mode || "page",
+        pageTitle: String(message.pageTitle || ""),
+        pageUrl: String(message.pageUrl || "")
       }).then((result) => sendResponse({ ok: true, ...result })).catch((error) => sendResponse({ ok: false, error: readableError(error), quotaLimited: isQuotaLimit(error) }));
       return true;
     }

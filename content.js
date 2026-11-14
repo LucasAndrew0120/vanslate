@@ -99,6 +99,7 @@
     'If an item contains simple inline HTML tags such as <strong>, <em>, <b>, <i>, <code>, <mark>, <sub>, <sup>, <a href="https://example.com">link</a>, or <span style="color:red">, preserve the same tags and safe inline styles around the corresponding translated text.',
     "For links, keep the exact href attribute value unchanged so the translated link still points to the same target.",
     "If an item mixes the target language with other languages, keep the parts already in the target language unchanged and translate only the non-target-language parts.",
+    "Use the page title, page URL, and the contexts array as background context for terminology, tone, and pronouns; never translate or output those context fields.",
     "If a short technical token, product name, URL, API name, model name, variable, or code-like fragment is already suitable in the target-language context, keep it unchanged.",
     "{glossaryBlock}",
     'Return only JSON in this exact shape: {"translations":["..."]}.',
@@ -128,7 +129,8 @@
   var CLONE_ATTR = "data-vanslate-clone";
   var SAFE_INLINE_TAGS = /* @__PURE__ */ new Set(["A", "B", "BR", "CODE", "EM", "I", "KBD", "MARK", "S", "SAMP", "SMALL", "SPAN", "STRONG", "SUB", "SUP", "U", "VAR"]);
   var SAFE_INLINE_STYLE_PROPS = ["color", "background-color", "font-weight", "font-style", "text-decoration"];
-  var MAX_BLOCKS_PER_PASS = 80;
+  var MAX_BLOCKS_PER_PASS = 2e3;
+  var MAX_CHARS_PER_PASS = 12e4;
   var FLOATING_DRAG_THRESHOLD = 4;
   var pendingElements = /* @__PURE__ */ new Map();
   var failedElements = /* @__PURE__ */ new Map();
@@ -258,7 +260,9 @@
         type: "TRANSLATE_TEXTS",
         texts: items,
         progressId: `page-${Date.now()}`,
-        mode: options.auto ? "auto" : "page"
+        mode: options.auto ? "auto" : "page",
+        pageTitle: document.title,
+        pageUrl: location.href
       });
       if (extensionContextInvalidated) return { translatedCount: 0, queuedCount: 0 };
       if (!response?.ok) {
@@ -308,13 +312,15 @@
   }
   async function collectAndMarkTextBlocks(roots = [document.body || document.documentElement]) {
     const blocks = await collectTextBlocks(roots);
+    const resolveContext = createHeadingContextResolver();
     const items = [];
     for (let index = 0; index < blocks.length; index += 1) {
       const element = blocks[index];
       const id = ensureElementId(element);
       const text = getElementSourceText(element);
-      markElementLoading(element, id, text);
-      items.push({ id, text });
+      const context = resolveContext(element);
+      markElementLoading(element, id, text, context);
+      items.push({ id, text, context });
       if (index % 8 === 7) await yieldToPage();
     }
     return items;
@@ -341,23 +347,50 @@
       return getElementDepth(b) - getElementDepth(a);
     });
     const blocks = [];
+    let collectedChars = 0;
     for (let index = 0; index < candidates.length; index += 1) {
       const element = candidates[index];
       if (blocks.length >= MAX_BLOCKS_PER_PASS) break;
+      if (collectedChars >= MAX_CHARS_PER_PASS) break;
       if (!(element instanceof HTMLElement)) continue;
       if (element.hasAttribute(STATE_ATTR)) continue;
       if (element.hasAttribute(CLONE_ATTR) || element.classList.contains(TRANSLATION_CLASS)) continue;
       if (element.closest(`#${PANEL_ID}, #${PROGRESS_ID}, #${TOOLBAR_ID}`)) continue;
       if (element.closest(`[${CLONE_ATTR}], .${TRANSLATION_CLASS}`)) continue;
       if (isIgnoredCandidate(element)) continue;
-      if (!isVisible(element)) continue;
+      if (!isRendered(element)) continue;
       const text = getElementSourceText(element);
       if (!isUsefulText(text, element)) continue;
       if (overlapsQueuedBlock(element, blocks)) continue;
       blocks.push(element);
+      collectedChars += text.length;
       if (index % 24 === 23) await yieldToPage();
     }
+    blocks.sort(compareDocumentOrder);
     return blocks;
+  }
+  function compareDocumentOrder(a, b) {
+    if (a === b) return 0;
+    return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
+  }
+  function createHeadingContextResolver() {
+    const headings = Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6")).filter((node) => !node.closest(`.${TRANSLATION_CLASS}, .${ORIGINAL_CLASS}`));
+    let index = 0;
+    return (element) => {
+      while (index < headings.length && element.compareDocumentPosition(headings[index]) & Node.DOCUMENT_POSITION_PRECEDING) {
+        index += 1;
+      }
+      const heading = headings[index - 1];
+      return heading ? normalizeText(heading.textContent).slice(0, 120) : "";
+    };
+  }
+  function isRendered(element) {
+    const style = window.getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) {
+      return false;
+    }
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
   }
   function normalizeCollectRoots(roots) {
     const fallback = document.body || document.documentElement;
@@ -476,11 +509,12 @@
       return new RegExp(fallback, "i");
     }
   }
-  function markElementLoading(element, id, text = "") {
+  function markElementLoading(element, id, text = "", context = "") {
     element.setAttribute(STATE_ATTR, "pending");
     pendingElements.set(id, {
       element,
       text,
+      context,
       settings: { ...currentSettings }
     });
     element.querySelectorAll(".vanslate-error-retry").forEach((node) => node.remove());
@@ -507,6 +541,7 @@
       failedElements.set(item.id, {
         element,
         text: pending?.text || item.text || getElementSourceText(element),
+        context: pending?.context || item.context || "",
         settings: pending?.settings || currentSettings,
         error: readableError(item.error)
       });
@@ -633,12 +668,14 @@
     if (!failed?.element || !failed.text) return;
     currentSettings = await loadRenderSettings();
     failed.element.querySelectorAll(".vanslate-error-retry").forEach((node) => node.remove());
-    markElementLoading(failed.element, id, failed.text);
+    markElementLoading(failed.element, id, failed.text, failed.context || "");
     const response = await safeRuntimeSendMessage({
       type: "TRANSLATE_TEXTS",
-      texts: [{ id, text: failed.text }],
+      texts: [{ id, text: failed.text, context: failed.context || "" }],
       progressId: `retry-${Date.now()}`,
-      mode: "retry"
+      mode: "retry",
+      pageTitle: document.title,
+      pageUrl: location.href
     });
     if (extensionContextInvalidated) return;
     if (!response?.ok) {
@@ -771,7 +808,9 @@
         type: "TRANSLATE_TEXTS",
         texts: items,
         progressId: `virtual-${Date.now()}`,
-        mode: "virtual-scroll"
+        mode: "virtual-scroll",
+        pageTitle: document.title,
+        pageUrl: location.href
       });
       if (extensionContextInvalidated) return;
       if (!response?.ok) markItemsFailed(items, response?.error || "Translation failed.");
@@ -1603,14 +1642,6 @@ Total: ${usage.total_tokens || 0}`;
   }
   function getSelectionText() {
     return window.getSelection()?.toString() || "";
-  }
-  function isVisible(element) {
-    const style = window.getComputedStyle(element);
-    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) {
-      return false;
-    }
-    const rect = element.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.top < window.innerHeight * 1.5;
   }
   function normalizeText(text) {
     return String(text || "").replace(/\s+/g, " ").trim();

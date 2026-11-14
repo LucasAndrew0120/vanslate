@@ -95,6 +95,8 @@ export interface TranslateTextContext {
   tabId?: number;
   progressId: string;
   mode: "page" | "auto" | string;
+  pageTitle?: string;
+  pageUrl?: string;
 }
 
 export interface ModelSettings {

@@ -32,8 +32,9 @@ import {
 } from "./utils";
 import { buildChatRequestBody } from "./chat-client";
 
-const VANSLATE_TRANSLATION_BATCH_SIZE = 4;
-const VANSLATE_TRANSLATION_CONCURRENCY = 2;
+const VANSLATE_TRANSLATION_BATCH_CHARS = 5000;
+const VANSLATE_TRANSLATION_BATCH_ITEMS = 60;
+const VANSLATE_TRANSLATION_CONCURRENCY = 1;
 
 export class TranslationService {
   constructor(
@@ -77,7 +78,7 @@ export class TranslationService {
         continue;
       }
 
-      const key = cacheKey(item.text, settings);
+      const key = cacheKey(item.text, settings, item.context);
       cacheKeysByIndex.set(item.index, key);
     }
 
@@ -109,7 +110,7 @@ export class TranslationService {
       stage: misses.length ? "translating" : "done"
     });
 
-    const batches = chunk(misses, VANSLATE_TRANSLATION_BATCH_SIZE);
+    const batches = chunkTranslationItems(misses);
     let nextBatchIndex = 0;
     const workerCount = Math.min(VANSLATE_TRANSLATION_CONCURRENCY, batches.length);
     await Promise.all(Array.from({ length: workerCount }, async () => {
@@ -118,7 +119,7 @@ export class TranslationService {
         nextBatchIndex += 1;
         if (!batch) continue;
         try {
-          const result = await this.translateBatch(batch.map((item) => item.text), settings);
+          const result = await this.translateBatch(batch, settings, context);
           const cacheUpdates: Record<string, { translation: string; updatedAt: number }> = {};
           batch.forEach((item, index) => {
             const translatedText = result.translations[index] || "";
@@ -277,29 +278,36 @@ export class TranslationService {
     };
   }
 
-  private async translateSingle(text: string, settings: ExtensionSettings): Promise<{ text: string; usage: Usage }> {
-    const result = await this.translateBatch([text], settings);
-    return {
-      text: result.translations[0] || "",
-      usage: result.usage
-    };
-  }
-
-  private async translateBatch(texts: string[], settings: ExtensionSettings): Promise<{ translations: string[]; usage: Usage }> {
+  private async translateBatch(
+    items: Array<{ text: string; context?: string }>,
+    settings: ExtensionSettings,
+    page: { pageTitle?: string; pageUrl?: string } = {}
+  ): Promise<{ translations: string[]; usage: Usage }> {
+    const texts = items.map((item) => item.text);
+    const contexts = items.map((item) => String(item.context || "").trim());
+    const hasContext = contexts.some(Boolean);
     const glossary = parseGlossary(settings.glossary);
     const glossaryText = glossary.length
       ? `Use this glossary exactly when applicable:\n${glossary.map((item) => `${item.source} => ${item.target}`).join("\n")}`
       : "No glossary is provided.";
-    const prompt = renderTemplate(settings.translationUserPrompt || DEFAULT_TRANSLATION_USER_PROMPT, {
+    const pageLines = [
+      page.pageTitle ? `Page title: ${page.pageTitle}` : "",
+      page.pageUrl ? `Page URL: ${page.pageUrl}` : ""
+    ].filter(Boolean).join("\n");
+    const contextRule = hasContext
+      ? "contexts[i] is the nearest section heading for texts[i]. Use it only as background context for terminology, tone, and pronouns; never translate or output it."
+      : "";
+    const template = renderTemplate(settings.translationUserPrompt || DEFAULT_TRANSLATION_USER_PROMPT, {
       text: texts.join("\n\n"),
-      textsJson: JSON.stringify({ texts }),
+      textsJson: JSON.stringify(hasContext ? { texts, contexts } : { texts }),
       sourceLanguage: settings.sourceLanguage,
       sourceLanguagePrompt: sourceLanguagePrompt(settings.sourceLanguage),
       targetLanguage: settings.targetLanguage,
       glossary: settings.glossary,
       glossaryBlock: glossaryText,
-      url: ""
+      url: page.pageUrl || ""
     });
+    const prompt = [pageLines, contextRule, template].filter(Boolean).join("\n");
 
     const response = await this.chatClient.complete({
       endpoint: joinUrl(settings.baseUrl, "/chat/completions"),
@@ -324,11 +332,11 @@ export class TranslationService {
     if (translations.length !== texts.length) {
       // Models occasionally drop or merge an item. Splitting the batch keeps
       // the rest of the page translated instead of failing all items at once.
-      if (texts.length > 1) {
-        const middle = Math.ceil(texts.length / 2);
+      if (items.length > 1) {
+        const middle = Math.ceil(items.length / 2);
         const [left, right] = await Promise.all([
-          this.translateBatch(texts.slice(0, middle), settings),
-          this.translateBatch(texts.slice(middle), settings)
+          this.translateBatch(items.slice(0, middle), settings, page),
+          this.translateBatch(items.slice(middle), settings, page)
         ]);
         return {
           translations: [...left.translations, ...right.translations],
@@ -377,10 +385,27 @@ export class TranslationService {
   }
 }
 
-function chunk<T>(items: T[], size: number): T[][] {
+/**
+ * Groups items by character budget so a full page usually needs a handful of
+ * requests instead of one per four blocks. A single oversized block still gets
+ * its own batch.
+ */
+function chunkTranslationItems<T extends { text: string }>(items: T[]): T[][] {
   const output: T[][] = [];
-  for (let index = 0; index < items.length; index += size) {
-    output.push(items.slice(index, index + size));
+  let current: T[] = [];
+  let chars = 0;
+  for (const item of items) {
+    const length = item.text.length;
+    const wouldOverflow = current.length > 0
+      && (chars + length > VANSLATE_TRANSLATION_BATCH_CHARS || current.length >= VANSLATE_TRANSLATION_BATCH_ITEMS);
+    if (wouldOverflow) {
+      output.push(current);
+      current = [];
+      chars = 0;
+    }
+    current.push(item);
+    chars += length;
   }
+  if (current.length) output.push(current);
   return output;
 }

@@ -44,7 +44,9 @@ ext.runtime.onMessage.addListener((message: any, sender: any, sendResponse: (val
     translationService.translateTexts(message.texts || [], {
       tabId: sender.tab?.id || message.tabId,
       progressId: message.progressId || "default",
-      mode: message.mode || "page"
+      mode: message.mode || "page",
+      pageTitle: String(message.pageTitle || ""),
+      pageUrl: String(message.pageUrl || "")
     })
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((error) => sendResponse({ ok: false, error: readableError(error), quotaLimited: isQuotaLimit(error) }));
